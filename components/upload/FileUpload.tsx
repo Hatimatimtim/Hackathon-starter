@@ -5,12 +5,41 @@ import { useRef, useState } from "react";
 export default function FileUpload() {
   const inputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<File[]>([]);
+  const [uploading, setUploading] = useState(false);
 
   function handleFiles(selected: FileList | null) {
     if (!selected) return;
 
-    setFiles(Array.from(selected));
+    const selectedFiles = Array.from(selected);
+
+setFiles(selectedFiles);
+
+if (selectedFiles.length > 0) {
+  uploadPDF(selectedFiles[0]);
+}
   }
+  async function uploadPDF(file: File) {
+  setUploading(true);
+
+  const formData = new FormData();
+  formData.append("file", file);
+
+  try {
+    const res = await fetch("/api/upload", {
+      method: "POST",
+      body: formData,
+    });
+
+    const data = await res.json();
+
+    alert(data.message);
+  } catch (err) {
+    alert("Upload failed");
+    console.error(err);
+  }
+
+  setUploading(false);
+}
 
   return (
     <div className="space-y-8">
@@ -35,10 +64,12 @@ export default function FileUpload() {
         />
 
         <button
-          onClick={() => inputRef.current?.click()}
+          
+           disabled={uploading}
+           onClick={() => inputRef.current?.click()}
           className="mt-8 rounded-lg bg-cyan-500 px-6 py-3 font-semibold text-black hover:bg-cyan-400"
         >
-          Choose File
+          {uploading ? "Uploading..." : "Choose File"}
         </button>
 
       </div>
