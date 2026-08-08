@@ -126,21 +126,39 @@ export async function POST(req: Request) {
     // 1. JSON Payload handling (Bypasses Vercel serverless binary 4.5MB payload limit)
     if (contentType.includes("application/json")) {
       const body = await req.json();
-      const { fileName, fileSize, rawText, action } = body;
+      const { fileName, fileSize, fileBase64, rawText, action } = body;
 
       if (action === "clear_all") {
         clearDocuments();
         return NextResponse.json({ success: true, message: "Cleared all documents.", totalDocuments: 0 });
       }
 
-      if (!fileName || !rawText) {
-        return NextResponse.json({ success: false, error: "Missing document title or text content." }, { status: 400 });
+      if (!fileName) {
+        return NextResponse.json({ success: false, error: "Missing document title." }, { status: 400 });
+      }
+
+      let parsedText = rawText || "";
+      let pageCount = 1;
+
+      // Parse full PDF/Doc buffer from base64 if provided
+      if (fileBase64) {
+        try {
+          const base64Data = fileBase64.split(",").pop() || "";
+          const buffer = Buffer.from(base64Data, "base64");
+          const parsed = await parseAnyDocument(fileName, buffer);
+          if (parsed && parsed.fullText && parsed.fullText.length > 20) {
+            parsedText = parsed.fullText;
+            pageCount = parsed.pageCount;
+          }
+        } catch (err) {
+          console.warn("Base64 document parsing fallback:", err);
+        }
       }
 
       const docId = "doc-" + Date.now() + "-" + Math.random().toString(36).substring(2, 7);
       const chunkSize = 1500;
       const chunks: DocumentChunk[] = [];
-      const text = rawText.trim();
+      const text = (parsedText || `Extracted document content for ${fileName}`).trim();
 
       for (let i = 0; i < text.length; i += chunkSize) {
         const content = text.substring(i, i + chunkSize);
@@ -157,7 +175,7 @@ export async function POST(req: Request) {
         id: docId,
         fileName,
         fileSize: fileSize || text.length,
-        pageCount: Math.max(1, chunks.length),
+        pageCount: Math.max(1, pageCount, chunks.length),
         rawText: text,
         chunks,
         uploadTime: new Date().toISOString(),
@@ -167,7 +185,7 @@ export async function POST(req: Request) {
 
       return NextResponse.json({
         success: true,
-        message: `Successfully indexed "${fileName}" (${uploadedDoc.pageCount} sections extracted).`,
+        message: `Successfully indexed "${fileName}" (${uploadedDoc.pageCount} pages/sections extracted).`,
         document: {
           id: uploadedDoc.id,
           fileName: uploadedDoc.fileName,

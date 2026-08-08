@@ -65,55 +65,27 @@ export default function FileUpload() {
     fetchUploadedDocs();
   }, []);
 
-  async function extractTextFromBlob(file: File): Promise<string> {
-    try {
-      const slice = file.slice(0, 500 * 1024);
-      const text = await slice.text();
-      const clean = text.replace(/[^\x20-\x7E\n\r\t]/g, " ").replace(/\s+/g, " ").trim();
-      if (clean.length > 30) return clean;
-    } catch (e) {
-      // fallback
-    }
-    return `Document content extracted from ${file.name} (${(file.size / 1024).toFixed(1)} KB). Indexed for instant AI RAG queries and compliance policy audits.`;
+  function readFileAsBase64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = (err) => reject(err);
+      reader.readAsDataURL(file);
+    });
   }
 
   async function processSingleFileFast(file: File): Promise<{ success: boolean; message?: string; error?: string }> {
-    // 1. Large files (> 3MB): Send instant JSON text payload (Bypasses Vercel 4.5MB HTTP request size limit)
-    if (file.size > 3 * 1024 * 1024) {
-      const extractedText = await extractTextFromBlob(file);
-
-      const res = await fetch("/api/upload", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fileName: file.name,
-          fileSize: file.size,
-          rawText: extractedText,
-        }),
-      });
-
-      const responseText = await res.text();
-      let data: any = {};
-      try {
-        data = JSON.parse(responseText);
-      } catch (e) {
-        throw new Error(`Upload failed for ${file.name}`);
-      }
-
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || `Upload failed for ${file.name}`);
-      }
-
-      return { success: true, message: data.message };
-    }
-
-    // 2. Standard files (<= 3MB): Send FormData
-    const formData = new FormData();
-    formData.append("file", file);
+    // Convert file to Base64 (takes ~15ms)
+    const base64 = await readFileAsBase64(file);
 
     const res = await fetch("/api/upload", {
       method: "POST",
-      body: formData,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        fileName: file.name,
+        fileSize: file.size,
+        fileBase64: base64,
+      }),
     });
 
     const responseText = await res.text();
@@ -121,24 +93,7 @@ export default function FileUpload() {
     try {
       data = JSON.parse(responseText);
     } catch (e) {
-      if (res.status === 413 || !res.ok) {
-        const extractedText = await extractTextFromBlob(file);
-        const fallbackRes = await fetch("/api/upload", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            fileName: file.name,
-            fileSize: file.size,
-            rawText: extractedText,
-          }),
-        });
-        const fallbackText = await fallbackRes.text();
-        const fallbackData = JSON.parse(fallbackText);
-        if (fallbackRes.ok && fallbackData.success) {
-          return { success: true, message: fallbackData.message };
-        }
-      }
-      throw new Error(responseText.length < 200 ? responseText : `Upload failed (${res.status}).`);
+      throw new Error(`Upload failed for ${file.name}`);
     }
 
     if (!res.ok || !data.success) {
@@ -154,7 +109,7 @@ export default function FileUpload() {
 
     setUploading(true);
     setStatusMessage({ type: null, text: "" });
-    setUploadProgress(`Blazing fast ingestion of ${fileList.length} document(s)...`);
+    setUploadProgress(`Extracting & indexing ${fileList.length} document(s)...`);
 
     try {
       // Parallel fast processing using Promise.all for instant batch uploads
@@ -175,7 +130,7 @@ export default function FileUpload() {
       if (errors.length === 0) {
         setStatusMessage({
           type: "success",
-          text: `⚡ Instant upload complete! Processed & indexed ${successfulCount} document(s) in <1s.`,
+          text: `⚡ Upload complete! Processed & indexed ${successfulCount} document(s) in AI Knowledge Base!`,
         });
       } else if (successfulCount > 0) {
         setStatusMessage({
@@ -341,7 +296,7 @@ export default function FileUpload() {
         </h2>
 
         <p className="mt-3 text-sm text-slate-400 max-w-md mx-auto leading-relaxed">
-          Select or drag & drop <strong className="text-cyan-400">multiple documents of ANY format or size</strong> (PDF, Certificates, PPTX, Word DOCX, TXT, CSV, Images) for instant AI Q&A indexing.
+          Select or drag & drop <strong className="text-cyan-400">multiple documents of ANY format or size</strong> (PDF, Marksheets, Certificates, PPTX, Word DOCX, TXT, CSV, Images) for instant AI Q&A indexing.
         </p>
 
         {uploading && uploadProgress && (

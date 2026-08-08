@@ -128,6 +128,36 @@ export function findUserByEmail(email: string) {
   );
 }
 
+export function createSessionToken(user: User): string {
+  const payload = {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    createdAt: user.createdAt,
+    exp: Date.now() + 7 * 24 * 60 * 60 * 1000,
+  };
+  return Buffer.from(JSON.stringify(payload)).toString("base64url");
+}
+
+export function parseSessionToken(token: string): User | null {
+  try {
+    if (!token) return null;
+    const jsonStr = Buffer.from(token, "base64url").toString("utf-8");
+    const payload = JSON.parse(jsonStr);
+    if (payload.exp && payload.exp < Date.now()) return null;
+    return {
+      id: payload.id,
+      name: payload.name,
+      email: payload.email,
+      role: payload.role,
+      createdAt: payload.createdAt,
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
 export function registerUser(data: {
   name: string;
   email: string;
@@ -146,7 +176,7 @@ export function registerUser(data: {
     name: data.name,
     email: data.email.toLowerCase(),
     role: data.role,
-    passwordHash: data.password, // Simple hash/storage for demo mode
+    passwordHash: data.password,
     avatarUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(data.name)}`,
     createdAt: new Date().toISOString(),
   };
@@ -165,7 +195,7 @@ export function registerUser(data: {
 
   const session: AuthSession = {
     user: publicUser,
-    token: `token-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+    token: createSessionToken(publicUser),
     createdAt: new Date().toISOString(),
   };
 
@@ -197,7 +227,7 @@ export function validateLogin(email: string, password: string): { user: User; se
 
   const session: AuthSession = {
     user: publicUser,
-    token: `token-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+    token: createSessionToken(publicUser),
     createdAt: new Date().toISOString(),
   };
 

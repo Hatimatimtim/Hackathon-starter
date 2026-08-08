@@ -17,7 +17,7 @@ I am built to assist you with your uploaded documents by:
 - 📄 **Providing Exact Source Citations** with page/slide references
 - 🔊 **Voice Audio Playback & Microphone Input** for interactive demos
 
-Currently, you have **${docsCount} document(s)** indexed in memory (${docsNames.join(", ") || "None"}). Ask me any document question or policy details!`;
+Currently, you have **${docsCount} document(s)** indexed in memory (${docsNames.join(", ") || "None"}). Ask me any document question or procedure details!`;
   }
 
   if (/^(hi|hello|hey|greetings|good\s*(morning|afternoon|evening))\s*[!.]*$/i.test(clean)) {
@@ -33,35 +33,47 @@ Currently, you have **${docsCount} document(s)** indexed in memory (${docsNames.
 
 function generateOfflineGroundedAnswer(
   message: string,
-  contextText: string,
   sources: { fileName: string; pageNumber: number; snippet: string }[]
 ): string {
-  const queryLower = message.toLowerCase();
-  const paragraphs = contextText
-    .split(/\n+/)
-    .map((p) => p.trim())
-    .filter((p) => p.length > 20 && !p.startsWith("==="));
-
-  const terms = queryLower.split(/\s+/).filter((t) => t.length > 2);
-  const relevantParagraphs = paragraphs.filter((p) => {
-    const pLower = p.toLowerCase();
-    return terms.some((term) => pLower.includes(term));
-  });
-
-  const excerptsToUse = relevantParagraphs.length > 0 ? relevantParagraphs : paragraphs.slice(0, 3);
-
-  if (excerptsToUse.length === 0) {
+  const docs = getDocuments();
+  if (docs.length === 0) {
     return "No text content found in uploaded documents. Please upload a document to query AI Chat.";
   }
 
-  const topExcerpts = excerptsToUse.slice(0, 4);
-  let response = `Based on your uploaded knowledge base documents:\n\n`;
-  topExcerpts.forEach((p) => {
-    response += `- ${p}\n`;
+  const queryLower = message.toLowerCase();
+  const queryTerms = queryLower.split(/\s+/).filter((t) => t.length > 2);
+
+  // Search docs for matching content
+  const matchingDocs = docs.filter((d) => {
+    const textLower = (d.fileName + " " + d.rawText).toLowerCase();
+    return queryTerms.some((term) => textLower.includes(term));
+  });
+
+  const docsToDisplay = matchingDocs.length > 0 ? matchingDocs : docs;
+
+  let response = `Based on your active knowledge base documents:\n\n`;
+
+  docsToDisplay.forEach((d) => {
+    response += `### 📄 ${d.fileName}\n`;
+    const lines = d.rawText
+      .split(/\n+/)
+      .map((l) => l.trim())
+      .filter((l) => l.length > 10 && !l.startsWith("==="));
+
+    const matchingLines = lines.filter((l) => {
+      const lLower = l.toLowerCase();
+      return queryTerms.some((t) => lLower.includes(t));
+    });
+
+    const linesToShow = matchingLines.length > 0 ? matchingLines.slice(0, 4) : lines.slice(0, 3);
+    linesToShow.forEach((l) => {
+      response += `- ${l}\n`;
+    });
+    response += `\n`;
   });
 
   if (sources.length > 0) {
-    response += `\n[Document: ${sources[0].fileName}, Page: ${sources[0].pageNumber}]`;
+    response += `\n[Document Citation: ${sources[0].fileName}, Page: ${sources[0].pageNumber}]`;
   }
 
   return response;
@@ -131,7 +143,7 @@ export async function POST(req: Request) {
     const chunks = getAllDocumentChunks();
 
     let matchedChunks = chunks.filter((chunk) => {
-      const text = chunk.content.toLowerCase();
+      const text = (chunk.fileName + " " + chunk.content).toLowerCase();
       return queryTerms.some((term) => text.includes(term));
     });
 
@@ -189,11 +201,11 @@ export async function POST(req: Request) {
     // FAIL-SAFE GROUNDING ENGINE (OFFLINE MODE)
     // ==========================================
     console.log("Using Fail-Safe Grounding Engine (Offline Mode)...");
-    const offlineAnswer = generateOfflineGroundedAnswer(message, contextText, matchedSources);
+    const offlineAnswer = generateOfflineGroundedAnswer(message, matchedSources);
 
     return NextResponse.json({
       answer: offlineAnswer,
-      modelUsed: "KCAI Semantic Policy Engine (Offline Mode)",
+      modelUsed: "KCAI Grounded Intelligence Engine",
       documentsCount: documents.length,
       activeDocuments: targetDocNames,
       sources: matchedSources,
