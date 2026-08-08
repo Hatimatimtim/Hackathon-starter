@@ -121,10 +121,70 @@ export async function DELETE() {
 
 export async function POST(req: Request) {
   try {
+    const contentType = req.headers.get("content-type") || "";
+
+    // 1. JSON Payload handling (Bypasses Vercel serverless binary 4.5MB payload limit)
+    if (contentType.includes("application/json")) {
+      const body = await req.json();
+      const { fileName, fileSize, rawText, action } = body;
+
+      if (action === "clear_all") {
+        clearDocuments();
+        return NextResponse.json({ success: true, message: "Cleared all documents.", totalDocuments: 0 });
+      }
+
+      if (!fileName || !rawText) {
+        return NextResponse.json({ success: false, error: "Missing document title or text content." }, { status: 400 });
+      }
+
+      const docId = "doc-" + Date.now() + "-" + Math.random().toString(36).substring(2, 7);
+      const chunkSize = 1500;
+      const chunks: DocumentChunk[] = [];
+      const text = rawText.trim();
+
+      for (let i = 0; i < text.length; i += chunkSize) {
+        const content = text.substring(i, i + chunkSize);
+        chunks.push({
+          id: `chunk-${docId}-${chunks.length + 1}`,
+          documentId: docId,
+          fileName,
+          pageNumber: chunks.length + 1,
+          content,
+        });
+      }
+
+      const uploadedDoc: UploadedDocument = {
+        id: docId,
+        fileName,
+        fileSize: fileSize || text.length,
+        pageCount: Math.max(1, chunks.length),
+        rawText: text,
+        chunks,
+        uploadTime: new Date().toISOString(),
+      };
+
+      addDocument(uploadedDoc);
+
+      return NextResponse.json({
+        success: true,
+        message: `Successfully indexed "${fileName}" (${uploadedDoc.pageCount} sections extracted).`,
+        document: {
+          id: uploadedDoc.id,
+          fileName: uploadedDoc.fileName,
+          fileSize: uploadedDoc.fileSize,
+          pageCount: uploadedDoc.pageCount,
+          chunksCount: chunks.length,
+          uploadTime: uploadedDoc.uploadTime,
+          previewSnippet: text.substring(0, 300) + "...",
+        },
+        totalDocuments: getDocuments().length,
+      });
+    }
+
+    // 2. FormData Binary File Upload handling
     const formData = await req.formData();
     const action = formData.get("action");
 
-    // Clear all action
     if (action === "clear_all") {
       clearDocuments();
       return NextResponse.json({
@@ -134,7 +194,6 @@ export async function POST(req: Request) {
       });
     }
 
-    // Pre-load demo dataset action for hackathon presentation
     if (action === "load_sample") {
       SAMPLE_DOCUMENTS.forEach((sample, i) => {
         const docId = `sample-doc-${Date.now()}-${i}`;
@@ -181,9 +240,7 @@ export async function POST(req: Request) {
 
     console.log(`Processing file: ${file.name} (${file.size} bytes)`);
 
-    // Parse ANY document (PDF, PPTX, DOCX, TXT, CSV, Images)
     const parsed = await parseAnyDocument(file.name, buffer);
-
     const docId = "doc-" + Date.now() + "-" + Math.random().toString(36).substring(2, 7);
 
     const chunks: DocumentChunk[] = parsed.pages.map((p, idx) => ({
@@ -205,10 +262,6 @@ export async function POST(req: Request) {
     };
 
     addDocument(uploadedDoc);
-
-    console.log(
-      `Successfully indexed ${file.name} (${parsed.fileType}): ${parsed.pageCount} pages/sections, ${chunks.length} chunks.`
-    );
 
     return NextResponse.json({
       success: true,

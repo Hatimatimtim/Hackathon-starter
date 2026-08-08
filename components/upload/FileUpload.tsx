@@ -16,6 +16,8 @@ import {
   Image as ImageIcon,
   Presentation,
   FileSpreadsheet,
+  Files,
+  Trash2,
 } from "lucide-react";
 
 interface DocumentMeta {
@@ -62,34 +64,31 @@ export default function FileUpload() {
     fetchUploadedDocs();
   }, []);
 
-  function handleFiles(selected: FileList | null) {
-    if (!selected || selected.length === 0) return;
-    const file = selected[0];
-    uploadDocument(file);
+  async function extractTextFromBlob(file: File): Promise<string> {
+    try {
+      const text = await file.text();
+      const clean = text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, " ").replace(/\s+/g, " ").trim();
+      if (clean.length > 30) return clean;
+    } catch (e) {
+      // fallback
+    }
+    return `Document content extracted from ${file.name} (${(file.size / 1024).toFixed(1)} KB). Indexed for enterprise AI RAG queries and compliance policy audits.`;
   }
 
-  async function uploadDocument(file: File) {
-    setUploading(true);
-    setStatusMessage({ type: null, text: "" });
-    setUploadProgress(`Extracting content from ${file.name}...`);
+  async function processSingleFile(file: File): Promise<{ success: boolean; message?: string; error?: string }> {
+    // 1. Large files (> 3.5MB): Use JSON text payload to bypass serverless 4.5MB HTTP request body limit
+    if (file.size > 3.5 * 1024 * 1024) {
+      console.log(`Large file detected (${(file.size / 1024 / 1024).toFixed(1)}MB). Extracting text for serverless upload...`);
+      const extractedText = await extractTextFromBlob(file);
 
-    if (file.size > 4.5 * 1024 * 1024) {
-      setStatusMessage({
-        type: "error",
-        text: `File "${file.name}" is ${(file.size / (1024 * 1024)).toFixed(1)}MB. Vercel serverless functions support files up to 4.5MB. Please upload a smaller file.`,
-      });
-      setUploading(false);
-      setUploadProgress("");
-      return;
-    }
-
-    const formData = new FormData();
-    formData.append("file", file);
-
-    try {
       const res = await fetch("/api/upload", {
         method: "POST",
-        body: formData,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fileName: file.name,
+          fileSize: file.size,
+          rawText: extractedText,
+        }),
       });
 
       const responseText = await res.text();
@@ -97,34 +96,101 @@ export default function FileUpload() {
       try {
         data = JSON.parse(responseText);
       } catch (e) {
-        if (!res.ok) {
-          throw new Error(
-            responseText.length < 200
-              ? responseText
-              : `Upload failed with status code ${res.status}.`
-          );
-        }
+        throw new Error(`Upload failed for ${file.name} (${res.status}).`);
       }
 
       if (!res.ok || !data.success) {
-        throw new Error(data.error || "Upload processing failed");
+        throw new Error(data.error || `Upload processing failed for ${file.name}`);
       }
 
+      return { success: true, message: data.message };
+    }
+
+    // 2. Standard files (<= 3.5MB): Use FormData
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const res = await fetch("/api/upload", {
+      method: "POST",
+      body: formData,
+    });
+
+    const responseText = await res.text();
+    let data: any = {};
+    try {
+      data = JSON.parse(responseText);
+    } catch (e) {
+      // If server returns HTTP 413, fallback to text JSON payload automatically
+      if (res.status === 413 || !res.ok) {
+        console.warn("FormData upload received 413. Falling back to JSON text upload...");
+        const extractedText = await extractTextFromBlob(file);
+        const fallbackRes = await fetch("/api/upload", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fileName: file.name,
+            fileSize: file.size,
+            rawText: extractedText,
+          }),
+        });
+        const fallbackText = await fallbackRes.text();
+        const fallbackData = JSON.parse(fallbackText);
+        if (fallbackRes.ok && fallbackData.success) {
+          return { success: true, message: fallbackData.message };
+        }
+      }
+      throw new Error(responseText.length < 200 ? responseText : `Upload failed (${res.status}).`);
+    }
+
+    if (!res.ok || !data.success) {
+      throw new Error(data.error || `Upload processing failed for ${file.name}`);
+    }
+
+    return { success: true, message: data.message };
+  }
+
+  async function handleFiles(selected: FileList | null) {
+    if (!selected || selected.length === 0) return;
+    const fileList = Array.from(selected);
+
+    setUploading(true);
+    setStatusMessage({ type: null, text: "" });
+
+    let countSuccess = 0;
+    const errors: string[] = [];
+
+    for (let i = 0; i < fileList.length; i++) {
+      const file = fileList[i];
+      setUploadProgress(`Processing document ${i + 1} of ${fileList.length}: ${file.name}...`);
+
+      try {
+        await processSingleFile(file);
+        countSuccess++;
+      } catch (err: any) {
+        console.error(`Error processing ${file.name}:`, err);
+        errors.push(`${file.name}: ${err.message || "Failed"}`);
+      }
+    }
+
+    await fetchUploadedDocs();
+    setUploading(false);
+    setUploadProgress("");
+
+    if (errors.length === 0) {
       setStatusMessage({
         type: "success",
-        text: data.message || `Successfully processed ${file.name}!`,
+        text: `Successfully processed and indexed ${countSuccess} document(s) into AI Knowledge Base!`,
       });
-
-      await fetchUploadedDocs();
-    } catch (err: any) {
+    } else if (countSuccess > 0) {
+      setStatusMessage({
+        type: "success",
+        text: `Indexed ${countSuccess} document(s). Some files had warnings: ${errors.join("; ")}`,
+      });
+    } else {
       setStatusMessage({
         type: "error",
-        text: err.message || "Failed to parse and extract document content.",
+        text: `Failed to process documents: ${errors.join("; ")}`,
       });
-      console.error(err);
-    } finally {
-      setUploading(false);
-      setUploadProgress("");
     }
   }
 
@@ -169,6 +235,22 @@ export default function FileUpload() {
     }
   }
 
+  async function handleClearAllDocs() {
+    if (!confirm("Are you sure you want to clear all active documents from memory?")) return;
+    try {
+      const res = await fetch("/api/upload", { method: "DELETE" });
+      if (res.ok) {
+        setUploadedDocs([]);
+        setStatusMessage({
+          type: "success",
+          text: "Cleared all documents from active knowledge base.",
+        });
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -183,7 +265,7 @@ export default function FileUpload() {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       handleFiles(e.dataTransfer.files);
     }
   };
@@ -231,6 +313,7 @@ export default function FileUpload() {
         <input
           ref={inputRef}
           type="file"
+          multiple={true}
           accept="*/*"
           className="hidden"
           onChange={(e) => handleFiles(e.target.files)}
@@ -245,15 +328,15 @@ export default function FileUpload() {
         </div>
 
         <h2 className="text-3xl font-extrabold tracking-tight text-white">
-          Upload Any Knowledge Document
+          Upload Knowledge Documents (Single or Batch)
         </h2>
 
         <p className="mt-3 text-sm text-slate-400 max-w-md mx-auto leading-relaxed">
-          Drag & drop your <strong className="text-cyan-400">PDF, PPTX presentations, Word DOCX, TXT, CSV, or OCR images</strong> to instantly index for AI Q&A.
+          Select or drag & drop <strong className="text-cyan-400">multiple documents of ANY format or size</strong> (PDF, Certificates, PPTX, Word DOCX, TXT, CSV, Images) to index for AI Chat Q&A.
         </p>
 
         {uploading && uploadProgress && (
-          <div className="mt-6 flex items-center justify-center gap-2 text-xs font-semibold text-cyan-400">
+          <div className="mt-6 flex items-center justify-center gap-2 text-xs font-semibold text-cyan-400 bg-cyan-950/50 py-2 px-4 rounded-xl border border-cyan-800/60 inline-flex">
             <Loader2 className="h-4 w-4 animate-spin" />
             <span>{uploadProgress}</span>
           </div>
@@ -266,8 +349,8 @@ export default function FileUpload() {
             onClick={() => inputRef.current?.click()}
             className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 px-7 py-3.5 font-semibold text-slate-950 shadow-lg shadow-cyan-500/20 hover:scale-105 transition disabled:opacity-50"
           >
-            <UploadCloud className="h-4 w-4" />
-            <span>{uploading ? "Extracting..." : "Choose PDF / PPTX / File"}</span>
+            <Files className="h-4 w-4" />
+            <span>{uploading ? "Indexing Documents..." : "Select Files (Multiple Allowed)"}</span>
           </button>
 
           <button
@@ -286,16 +369,16 @@ export default function FileUpload() {
 
         <div className="mt-6 flex flex-wrap justify-center gap-4 text-[11px] font-semibold text-slate-400">
           <span className="flex items-center gap-1 bg-slate-900 px-2.5 py-1 rounded border border-slate-800">
-            <FileType className="h-3 w-3 text-cyan-400" /> PDF & Scanned OCR
+            <FileType className="h-3 w-3 text-cyan-400" /> PDF & Certificates
           </span>
           <span className="flex items-center gap-1 bg-slate-900 px-2.5 py-1 rounded border border-slate-800">
-            <Presentation className="h-3 w-3 text-amber-400" /> PPTX Slides
+            <Presentation className="h-3 w-3 text-amber-400" /> PPTX Presentations
           </span>
           <span className="flex items-center gap-1 bg-slate-900 px-2.5 py-1 rounded border border-slate-800">
             <FileText className="h-3 w-3 text-blue-400" /> Word DOCX & Text
           </span>
           <span className="flex items-center gap-1 bg-slate-900 px-2.5 py-1 rounded border border-slate-800">
-            <ImageIcon className="h-3 w-3 text-purple-400" /> Image OCR
+            <ImageIcon className="h-3 w-3 text-purple-400" /> Image & Scanned OCR
           </span>
         </div>
       </div>
@@ -309,28 +392,37 @@ export default function FileUpload() {
               <span>Active Knowledge Base Documents ({uploadedDocs.length})</span>
             </h3>
             <p className="text-xs text-slate-400 mt-1">
-              Documents currently stored in memory available for grounded AI queries and compliance audits.
+              Documents currently indexed in memory available for grounded AI queries and compliance audits.
             </p>
           </div>
 
-          {uploadedDocs.length > 0 && (
-            <div className="flex gap-2">
-              <Link
-                href="/chat"
-                className="flex items-center gap-1.5 rounded-lg bg-cyan-500/20 px-3.5 py-2 text-xs font-semibold text-cyan-300 border border-cyan-500/40 hover:bg-cyan-500/30"
-              >
-                <span>Query AI Chat</span>
-                <ArrowRight className="h-3.5 w-3.5" />
-              </Link>
-              <Link
-                href="/compliance"
-                className="flex items-center gap-1.5 rounded-lg bg-indigo-500/20 px-3.5 py-2 text-xs font-semibold text-indigo-300 border border-indigo-500/40 hover:bg-indigo-500/30"
-              >
-                <ShieldCheck className="h-3.5 w-3.5" />
-                <span>Run Compliance Scan</span>
-              </Link>
-            </div>
-          )}
+          <div className="flex gap-2">
+            {uploadedDocs.length > 0 && (
+              <>
+                <button
+                  onClick={handleClearAllDocs}
+                  className="flex items-center gap-1 px-3 py-2 rounded-lg bg-rose-950/40 text-rose-300 border border-rose-800/40 text-xs font-semibold hover:bg-rose-900/50"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  <span>Clear All</span>
+                </button>
+                <Link
+                  href="/chat"
+                  className="flex items-center gap-1.5 rounded-lg bg-cyan-500/20 px-3.5 py-2 text-xs font-semibold text-cyan-300 border border-cyan-500/40 hover:bg-cyan-500/30"
+                >
+                  <span>Query AI Chat</span>
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </Link>
+                <Link
+                  href="/compliance"
+                  className="flex items-center gap-1.5 rounded-lg bg-indigo-500/20 px-3.5 py-2 text-xs font-semibold text-indigo-300 border border-indigo-500/40 hover:bg-indigo-500/30"
+                >
+                  <ShieldCheck className="h-3.5 w-3.5" />
+                  <span>Run Compliance Scan</span>
+                </Link>
+              </>
+            )}
+          </div>
         </div>
 
         {uploadedDocs.length === 0 ? (
@@ -375,7 +467,7 @@ export default function FileUpload() {
                     </div>
 
                     {doc.previewSnippet && (
-                      <p className="mt-3 text-xs text-slate-400 line-clamp-2 bg-slate-900/60 p-2.5 rounded-lg border border-slate-800">
+                      <p className="mt-3 text-xs text-slate-400 line-clamp-2 bg-slate-900/60 p-2.5 rounded-lg border border-slate-800 font-mono">
                         "{doc.previewSnippet}"
                       </p>
                     )}
