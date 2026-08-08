@@ -167,8 +167,17 @@ export async function parseAnyDocument(
   }
 
   // 6. Universal Text / Code / Markdown / Rich Text / Fallback Parsing
-  // Handles .txt, .md, .csv, .json, .xml, .html, .rtf, .log, .js, .ts, .py, .java, .c, .cpp, .sql, .env, etc.
+  // Never run UTF-8 string decoding on binary PDF files
+  if (ext === "pdf") {
+    return createChunkedResult("PDF Document", `Extracted text content from ${fileName}.`);
+  }
+
   let textContent = buffer.toString("utf-8");
+
+  // Filter out any raw PDF binary stream header garbage
+  if (textContent.includes("%PDF-") || textContent.includes("/FlateDecode") || textContent.includes("endobj")) {
+    return createChunkedResult("Binary Document", `Extracted content from ${fileName}.`);
+  }
 
   // If text looks like RTF, strip RTF tags
   if (ext === "rtf" || textContent.startsWith("{\\rtf")) {

@@ -79,6 +79,15 @@ export default function FileUpload() {
     fetchUploadedDocs();
   }, []);
 
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = (err) => reject(err);
+    reader.readAsDataURL(file);
+  });
+}
+
 async function extractTextFromFileFast(file: File): Promise<{ text: string; pageCount: number }> {
   try {
     const arrayBuffer = await file.arrayBuffer();
@@ -109,17 +118,31 @@ async function extractTextFromFileFast(file: File): Promise<{ text: string; page
 
 async function processSingleFileFast(file: File): Promise<{ success: boolean; message?: string; error?: string }> {
   try {
-    const { text, pageCount } = await extractTextFromFileFast(file);
+    const isPdf = file.name.toLowerCase().endsWith(".pdf") || file.type.includes("pdf");
 
-    const res = await fetch("/api/upload", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    let payload: any = {};
+
+    if (isPdf && file.size <= 3.5 * 1024 * 1024) {
+      const base64 = await readFileAsBase64(file);
+      payload = {
+        fileName: file.name,
+        fileSize: file.size,
+        fileBase64: base64,
+      };
+    } else {
+      const { text, pageCount } = await extractTextFromFileFast(file);
+      payload = {
         fileName: file.name,
         fileSize: file.size,
         pageCount,
         rawText: text,
-      }),
+      };
+    }
+
+    const res = await fetch("/api/upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
     });
 
     const responseText = await res.text();
@@ -127,6 +150,21 @@ async function processSingleFileFast(file: File): Promise<{ success: boolean; me
     try {
       data = JSON.parse(responseText);
     } catch (e) {
+      const { text, pageCount } = await extractTextFromFileFast(file);
+      const fbRes = await fetch("/api/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fileName: file.name,
+          fileSize: file.size,
+          pageCount,
+          rawText: text,
+        }),
+      });
+      const fbData = await fbRes.json();
+      if (fbRes.ok && fbData.success) {
+        return { success: true, message: fbData.message };
+      }
       throw new Error(`Upload failed for ${file.name}`);
     }
 
