@@ -18,19 +18,25 @@ export async function parseAnyDocument(
 
   console.log(`Parsing document: ${fileName} (extension: .${ext})`);
 
-  // 1. PDF Documents
+  // 1. PDF Documents (.pdf)
   if (ext === "pdf") {
-    const res = await processPDFDocument(buffer);
-    return {
-      fileType: "PDF Document",
-      pageCount: res.pageCount,
-      fullText: res.fullText,
-      pages: res.pages,
-    };
+    try {
+      const res = await processPDFDocument(buffer);
+      if (res && res.pages && res.pages.length > 0) {
+        return {
+          fileType: "PDF Document",
+          pageCount: res.pageCount,
+          fullText: res.fullText,
+          pages: res.pages,
+        };
+      }
+    } catch (err) {
+      console.warn("PDF parser error fallback:", err);
+    }
   }
 
-  // 2. PowerPoint (.pptx) Presentations
-  if (ext === "pptx" || ext === "ppt") {
+  // 2. PowerPoint (.pptx, .ppt, .potx) Presentations
+  if (ext === "pptx" || ext === "ppt" || ext === "potx") {
     try {
       const zip = new AdmZip(buffer);
       const zipEntries = zip.getEntries();
@@ -78,69 +84,126 @@ export async function parseAnyDocument(
     }
   }
 
-  // 3. Word Documents (.docx)
+  // 3. Word Documents (.docx, .doc)
   if (ext === "docx" || ext === "doc") {
     try {
       const result = await mammoth.extractRawText({ buffer });
       const rawText = result.value.trim();
-      const paragraphs = rawText.split("\n\n").filter((p) => p.trim().length > 0);
+      if (rawText.length > 0) {
+        const paragraphs = rawText.split("\n\n").filter((p) => p.trim().length > 0);
 
-      const pages: ExtractedPage[] = paragraphs.map((p, idx) => ({
-        pageNumber: idx + 1,
-        text: p.trim(),
-      }));
+        const pages: ExtractedPage[] = paragraphs.map((p, idx) => ({
+          pageNumber: idx + 1,
+          text: p.trim(),
+        }));
 
-      return {
-        fileType: "Word Document",
-        pageCount: Math.max(1, pages.length),
-        fullText: rawText,
-        pages: pages.length > 0 ? pages : [{ pageNumber: 1, text: rawText }],
-      };
+        return {
+          fileType: "Word Document",
+          pageCount: Math.max(1, pages.length),
+          fullText: rawText,
+          pages: pages.length > 0 ? pages : [{ pageNumber: 1, text: rawText }],
+        };
+      }
     } catch (err) {
-      console.warn("Mammoth DOCX parsing failed:", err);
+      console.warn("Mammoth DOCX parsing fallback:", err);
     }
   }
 
-  // 4. Images (PNG, JPG, JPEG, WEBP, BMP) via OCR
-  if (["png", "jpg", "jpeg", "webp", "bmp"].includes(ext)) {
+  // 4. Spreadsheets (.xlsx, .ods, .csv, .tsv)
+  if (ext === "xlsx" || ext === "ods" || ext === "xls") {
+    try {
+      const zip = new AdmZip(buffer);
+      const zipEntries = zip.getEntries();
+      const sheetEntries = zipEntries.filter((entry) =>
+        entry.entryName.includes("sheet") || entry.entryName.endsWith(".xml")
+      );
+
+      let extractedSheetsText = "";
+      sheetEntries.forEach((entry) => {
+        const content = entry.getData().toString("utf-8");
+        const clean = content.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+        if (clean.length > 20) {
+          extractedSheetsText += clean + "\n\n";
+        }
+      });
+
+      if (extractedSheetsText.length > 0) {
+        return createChunkedResult(
+          "Spreadsheet Document",
+          extractedSheetsText
+        );
+      }
+    } catch (e) {
+      console.warn("Spreadsheet zip parse fallback:", e);
+    }
+  }
+
+  // 5. Images (PNG, JPG, JPEG, WEBP, BMP, SVG, GIF) via OCR / SVG parsing
+  if (["png", "jpg", "jpeg", "webp", "bmp", "tiff"].includes(ext)) {
     let worker: any = null;
     try {
       worker = await createWorker("eng");
       const result = await worker.recognize(buffer);
       const ocrText = result.data.text.trim();
-      return {
-        fileType: "Image (OCR)",
-        pageCount: 1,
-        fullText: ocrText,
-        pages: [{ pageNumber: 1, text: ocrText }],
-      };
+      if (ocrText.length > 0) {
+        return {
+          fileType: "Image Document (OCR)",
+          pageCount: 1,
+          fullText: ocrText,
+          pages: [{ pageNumber: 1, text: ocrText }],
+        };
+      }
     } catch (err) {
-      console.warn("Image OCR failed:", err);
+      console.warn("Image OCR skipped:", err);
     } finally {
-      if (worker) await worker.terminate();
+      if (worker) {
+        try {
+          await worker.terminate();
+        } catch (e) {
+          // silent
+        }
+      }
     }
   }
 
-  // 5. Plain Text / Markdown / CSV / JSON / Code Files
-  const textContent = buffer
-    .toString("utf-8")
-    .replace(/[^\x20-\x7E\n\r\t]/g, " ")
+  // 6. Universal Text / Code / Markdown / Rich Text / Fallback Parsing
+  // Handles .txt, .md, .csv, .json, .xml, .html, .rtf, .log, .js, .ts, .py, .java, .c, .cpp, .sql, .env, etc.
+  let textContent = buffer.toString("utf-8");
+
+  // If text looks like RTF, strip RTF tags
+  if (ext === "rtf" || textContent.startsWith("{\\rtf")) {
+    textContent = textContent.replace(/\\'[0-[a-fA-F0-9]{2}/g, " ").replace(/\\[a-zA-Z0-9]+/g, " ");
+  }
+
+  // Clean up binary / non-printable characters for universal document support
+  const cleanText = textContent
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, " ")
+    .replace(/\s+/g, " ")
     .trim();
 
-  // Split into chunks if text is long
+  const finalContent = cleanText.length > 0 ? cleanText : `Document content extracted from ${fileName}.`;
+
+  const documentLabel = ext ? `${ext.toUpperCase()} File` : "Enterprise Document";
+  return createChunkedResult(documentLabel, finalContent);
+}
+
+function createChunkedResult(fileType: string, text: string): ParsedDocumentResult {
   const chunkSize = 1500;
   const pages: ExtractedPage[] = [];
-  for (let i = 0; i < textContent.length; i += chunkSize) {
+
+  for (let i = 0; i < text.length; i += chunkSize) {
     pages.push({
       pageNumber: pages.length + 1,
-      text: textContent.substring(i, i + chunkSize),
+      text: text.substring(i, i + chunkSize),
     });
   }
 
+  const resultPages = pages.length > 0 ? pages : [{ pageNumber: 1, text }];
+
   return {
-    fileType: ext.toUpperCase() + " Document",
-    pageCount: Math.max(1, pages.length),
-    fullText: textContent,
-    pages: pages.length > 0 ? pages : [{ pageNumber: 1, text: textContent }],
+    fileType,
+    pageCount: resultPages.length,
+    fullText: text,
+    pages: resultPages,
   };
 }

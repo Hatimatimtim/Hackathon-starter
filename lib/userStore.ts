@@ -207,6 +207,24 @@ export function validateLogin(email: string, password: string): { user: User; se
   return { user: publicUser, session };
 }
 
+export function resetUserPassword(email: string, newPassword: string): User {
+  if (!globalThis.usersStore) globalThis.usersStore = DEFAULT_USERS;
+
+  const userIndex = globalThis.usersStore.findIndex(
+    (u) => u.email.toLowerCase() === email.toLowerCase()
+  );
+
+  if (userIndex === -1) {
+    throw new Error("No account associated with this email address was found.");
+  }
+
+  globalThis.usersStore[userIndex].passwordHash = newPassword;
+  saveUsersToDisk();
+
+  const { passwordHash, ...publicUser } = globalThis.usersStore[userIndex];
+  return publicUser;
+}
+
 export function getCurrentSession(): AuthSession | null {
   return globalThis.currentSessionStore || null;
 }
