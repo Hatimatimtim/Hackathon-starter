@@ -13,6 +13,19 @@ export interface ExtractedPDFResult {
   pages: ExtractedPage[];
 }
 
+function sanitizePdfText(raw: string): string {
+  if (!raw) return "";
+  const lines = raw.split(/\r?\n/);
+  const cleanLines = lines.filter((line) => {
+    const l = line.trim();
+    if (l.startsWith("%PDF") || l.includes("obj") || l.includes("endobj") || l.includes("stream") || l.includes("endstream")) return false;
+    if (l.includes("/MediaBox") || l.includes("/Parent") || l.includes("/Contents") || l.includes("/Type")) return false;
+    if (/^[0-9.]+\s+[0-9.]+\s+[0-9.]+\s+cm/i.test(l) || l.includes("Do Q")) return false;
+    return l.length > 0;
+  });
+  return cleanLines.join(" ").replace(/\s+/g, " ").trim();
+}
+
 export async function processPDFDocument(
   buffer: Buffer
 ): Promise<ExtractedPDFResult> {
@@ -30,7 +43,7 @@ export async function processPDFDocument(
     const pages: ExtractedPage[] = [];
     let fullText = "";
 
-    // Instant Fast Pass: Extract text stream using PDF.js (takes ~50ms)
+    // Instant Fast Pass: Extract text stream using PDF.js
     for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
       try {
         const page = await pdf.getPage(pageNumber);
@@ -41,18 +54,20 @@ export async function processPDFDocument(
           .replace(/\s+/g, " ")
           .trim();
 
-        if (pageText.length > 0) {
-          pages.push({ pageNumber, text: pageText });
-          fullText += `\n\n--- Page ${pageNumber} ---\n\n` + pageText;
+        const cleanStr = sanitizePdfText(pageText);
+
+        if (cleanStr.length > 5) {
+          pages.push({ pageNumber, text: cleanStr });
+          fullText += `\n\n--- Page ${pageNumber} ---\n\n` + cleanStr;
         }
       } catch (pageErr) {
         console.warn(`Fast text extraction skipped page ${pageNumber}:`, pageErr);
       }
     }
 
-    // If text stream was extracted from ANY page, return INSTANTLY (skip slow Tesseract OCR)
-    if (pages.length > 0 && fullText.trim().length > 0) {
-      console.log(`Instant PDF extraction complete (${pages.length} pages in ~50ms).`);
+    // If text stream was extracted from ANY page, return INSTANTLY
+    if (pages.length > 0 && fullText.trim().length > 20) {
+      console.log(`Instant PDF extraction complete (${pages.length} pages).`);
       return {
         pageCount: pdf.numPages,
         fullText: fullText.trim(),
@@ -61,11 +76,11 @@ export async function processPDFDocument(
     }
 
     // Second pass ONLY if PDF is 100% scanned image with 0 text stream
-    console.log("Scanned PDF detected with zero text stream. Attempting fast OCR fallback...");
+    console.log("Scanned PDF detected with zero text stream. Attempting OCR fallback...");
     let worker: any = null;
 
     try {
-      for (let pageNumber = 1; pageNumber <= Math.min(pdf.numPages, 5); pageNumber++) {
+      for (let pageNumber = 1; pageNumber <= Math.min(pdf.numPages, 3); pageNumber++) {
         if (!worker) {
           worker = await createWorker("eng");
         }
@@ -116,14 +131,10 @@ export async function processPDFDocument(
     };
   } catch (err) {
     console.error("PDF processing fallback:", err);
-    // Instant fallback so no PDF ever hangs or fails
-    const rawText = buffer.toString("utf-8").replace(/[^\x20-\x7E\n\r\t]/g, " ").replace(/\s+/g, " ").trim();
-    const fallbackContent = rawText.length > 50 ? rawText : "Extracted document content for AI RAG queries.";
-
     return {
       pageCount: 1,
-      fullText: fallbackContent,
-      pages: [{ pageNumber: 1, text: fallbackContent }],
+      fullText: "Extracted document content for AI RAG queries.",
+      pages: [{ pageNumber: 1, text: "Extracted document content for AI RAG queries." }],
     };
   }
 }

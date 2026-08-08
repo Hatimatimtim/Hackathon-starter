@@ -168,7 +168,16 @@ export async function POST(req: Request) {
       });
     }
 
-    const documents = Array.from(allDocsMap.values());
+    const allDocuments = Array.from(allDocsMap.values());
+
+    // Filter out demo sample corporate policies when custom user documents are uploaded
+    const customUserDocs = allDocuments.filter(
+      (d) =>
+        d.fileName !== "Global_Corporate_Security_&_Compliance_Policy_2026.pdf" &&
+        d.fileName !== "HR_Employee_Handbook_&_Remote_Work_Guidelines.pptx"
+    );
+
+    const documents = customUserDocs.length > 0 ? customUserDocs : allDocuments;
     const activeDocNames = documents.map((d) => d.fileName);
 
     // Check for conversational greetings / small talk first
