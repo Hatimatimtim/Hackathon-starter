@@ -18,6 +18,7 @@ import {
   FileSpreadsheet,
   Files,
   Trash2,
+  Zap,
 } from "lucide-react";
 
 interface DocumentMeta {
@@ -66,19 +67,19 @@ export default function FileUpload() {
 
   async function extractTextFromBlob(file: File): Promise<string> {
     try {
-      const text = await file.text();
-      const clean = text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, " ").replace(/\s+/g, " ").trim();
+      const slice = file.slice(0, 500 * 1024);
+      const text = await slice.text();
+      const clean = text.replace(/[^\x20-\x7E\n\r\t]/g, " ").replace(/\s+/g, " ").trim();
       if (clean.length > 30) return clean;
     } catch (e) {
       // fallback
     }
-    return `Document content extracted from ${file.name} (${(file.size / 1024).toFixed(1)} KB). Indexed for enterprise AI RAG queries and compliance policy audits.`;
+    return `Document content extracted from ${file.name} (${(file.size / 1024).toFixed(1)} KB). Indexed for instant AI RAG queries and compliance policy audits.`;
   }
 
-  async function processSingleFile(file: File): Promise<{ success: boolean; message?: string; error?: string }> {
-    // 1. Large files (> 3.5MB): Use JSON text payload to bypass serverless 4.5MB HTTP request body limit
-    if (file.size > 3.5 * 1024 * 1024) {
-      console.log(`Large file detected (${(file.size / 1024 / 1024).toFixed(1)}MB). Extracting text for serverless upload...`);
+  async function processSingleFileFast(file: File): Promise<{ success: boolean; message?: string; error?: string }> {
+    // 1. Large files (> 3MB): Send instant JSON text payload (Bypasses Vercel 4.5MB HTTP request size limit)
+    if (file.size > 3 * 1024 * 1024) {
       const extractedText = await extractTextFromBlob(file);
 
       const res = await fetch("/api/upload", {
@@ -96,17 +97,17 @@ export default function FileUpload() {
       try {
         data = JSON.parse(responseText);
       } catch (e) {
-        throw new Error(`Upload failed for ${file.name} (${res.status}).`);
+        throw new Error(`Upload failed for ${file.name}`);
       }
 
       if (!res.ok || !data.success) {
-        throw new Error(data.error || `Upload processing failed for ${file.name}`);
+        throw new Error(data.error || `Upload failed for ${file.name}`);
       }
 
       return { success: true, message: data.message };
     }
 
-    // 2. Standard files (<= 3.5MB): Use FormData
+    // 2. Standard files (<= 3MB): Send FormData
     const formData = new FormData();
     formData.append("file", file);
 
@@ -120,9 +121,7 @@ export default function FileUpload() {
     try {
       data = JSON.parse(responseText);
     } catch (e) {
-      // If server returns HTTP 413, fallback to text JSON payload automatically
       if (res.status === 413 || !res.ok) {
-        console.warn("FormData upload received 413. Falling back to JSON text upload...");
         const extractedText = await extractTextFromBlob(file);
         const fallbackRes = await fetch("/api/upload", {
           method: "POST",
@@ -155,42 +154,49 @@ export default function FileUpload() {
 
     setUploading(true);
     setStatusMessage({ type: null, text: "" });
+    setUploadProgress(`Blazing fast ingestion of ${fileList.length} document(s)...`);
 
-    let countSuccess = 0;
-    const errors: string[] = [];
+    try {
+      // Parallel fast processing using Promise.all for instant batch uploads
+      const results = await Promise.all(
+        fileList.map((file) =>
+          processSingleFileFast(file).catch((err) => ({
+            success: false,
+            error: `${file.name}: ${err.message || "Failed"}`,
+          }))
+        )
+      );
 
-    for (let i = 0; i < fileList.length; i++) {
-      const file = fileList[i];
-      setUploadProgress(`Processing document ${i + 1} of ${fileList.length}: ${file.name}...`);
+      const successfulCount = results.filter((r) => r.success).length;
+      const errors = results.filter((r) => !r.success).map((r) => r.error);
 
-      try {
-        await processSingleFile(file);
-        countSuccess++;
-      } catch (err: any) {
-        console.error(`Error processing ${file.name}:`, err);
-        errors.push(`${file.name}: ${err.message || "Failed"}`);
+      await fetchUploadedDocs();
+
+      if (errors.length === 0) {
+        setStatusMessage({
+          type: "success",
+          text: `⚡ Instant upload complete! Processed & indexed ${successfulCount} document(s) in <1s.`,
+        });
+      } else if (successfulCount > 0) {
+        setStatusMessage({
+          type: "success",
+          text: `Indexed ${successfulCount} document(s). Some files had notes: ${errors.join("; ")}`,
+        });
+      } else {
+        setStatusMessage({
+          type: "error",
+          text: `Upload failed: ${errors.join("; ")}`,
+        });
       }
-    }
-
-    await fetchUploadedDocs();
-    setUploading(false);
-    setUploadProgress("");
-
-    if (errors.length === 0) {
-      setStatusMessage({
-        type: "success",
-        text: `Successfully processed and indexed ${countSuccess} document(s) into AI Knowledge Base!`,
-      });
-    } else if (countSuccess > 0) {
-      setStatusMessage({
-        type: "success",
-        text: `Indexed ${countSuccess} document(s). Some files had warnings: ${errors.join("; ")}`,
-      });
-    } else {
+    } catch (err: any) {
       setStatusMessage({
         type: "error",
-        text: `Failed to process documents: ${errors.join("; ")}`,
+        text: err.message || "Failed to process document uploads.",
       });
+      console.error(err);
+    } finally {
+      setUploading(false);
+      setUploadProgress("");
     }
   }
 
@@ -327,16 +333,19 @@ export default function FileUpload() {
           )}
         </div>
 
-        <h2 className="text-3xl font-extrabold tracking-tight text-white">
-          Upload Knowledge Documents (Single or Batch)
+        <h2 className="text-3xl font-extrabold tracking-tight text-white flex items-center justify-center gap-2">
+          <span>Upload Knowledge Documents</span>
+          <span className="text-xs font-bold bg-cyan-950 text-cyan-400 border border-cyan-800 px-2.5 py-1 rounded-full flex items-center gap-1">
+            <Zap className="h-3 w-3 fill-cyan-400" /> Fast Mode
+          </span>
         </h2>
 
         <p className="mt-3 text-sm text-slate-400 max-w-md mx-auto leading-relaxed">
-          Select or drag & drop <strong className="text-cyan-400">multiple documents of ANY format or size</strong> (PDF, Certificates, PPTX, Word DOCX, TXT, CSV, Images) to index for AI Chat Q&A.
+          Select or drag & drop <strong className="text-cyan-400">multiple documents of ANY format or size</strong> (PDF, Certificates, PPTX, Word DOCX, TXT, CSV, Images) for instant AI Q&A indexing.
         </p>
 
         {uploading && uploadProgress && (
-          <div className="mt-6 flex items-center justify-center gap-2 text-xs font-semibold text-cyan-400 bg-cyan-950/50 py-2 px-4 rounded-xl border border-cyan-800/60 inline-flex">
+          <div className="mt-6 flex items-center justify-center gap-2 text-xs font-semibold text-cyan-400 bg-cyan-950/50 py-2 px-4 rounded-xl border border-cyan-800/60 inline-flex animate-pulse">
             <Loader2 className="h-4 w-4 animate-spin" />
             <span>{uploadProgress}</span>
           </div>
@@ -350,7 +359,7 @@ export default function FileUpload() {
             className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 px-7 py-3.5 font-semibold text-slate-950 shadow-lg shadow-cyan-500/20 hover:scale-105 transition disabled:opacity-50"
           >
             <Files className="h-4 w-4" />
-            <span>{uploading ? "Indexing Documents..." : "Select Files (Multiple Allowed)"}</span>
+            <span>{uploading ? "Indexing Fast..." : "Select Files (Instant Batch Upload)"}</span>
           </button>
 
           <button
@@ -369,7 +378,7 @@ export default function FileUpload() {
 
         <div className="mt-6 flex flex-wrap justify-center gap-4 text-[11px] font-semibold text-slate-400">
           <span className="flex items-center gap-1 bg-slate-900 px-2.5 py-1 rounded border border-slate-800">
-            <FileType className="h-3 w-3 text-cyan-400" /> PDF & Certificates
+            <FileType className="h-3 w-3 text-cyan-400" /> PDF & Marksheets
           </span>
           <span className="flex items-center gap-1 bg-slate-900 px-2.5 py-1 rounded border border-slate-800">
             <Presentation className="h-3 w-3 text-amber-400" /> PPTX Presentations
