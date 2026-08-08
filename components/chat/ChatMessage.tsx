@@ -6,25 +6,15 @@ import {
   User,
   Copy,
   Check,
-  FileText,
-  ChevronDown,
-  ChevronUp,
   Sparkles,
   Volume2,
   VolumeX,
 } from "lucide-react";
 
-export type SourceCitation = {
-  fileName: string;
-  pageNumber: number;
-  snippet: string;
-};
-
 type ChatMessageProps = {
   role: "user" | "assistant";
   message: string;
   modelUsed?: string;
-  sources?: SourceCitation[];
 };
 
 function formatFormattedLine(line: string) {
@@ -46,11 +36,9 @@ export default function ChatMessage({
   role,
   message,
   modelUsed,
-  sources = [],
 }: ChatMessageProps) {
   const isUser = role === "user";
   const [copied, setCopied] = useState(false);
-  const [showSources, setShowSources] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
 
   useEffect(() => {
@@ -106,7 +94,7 @@ export default function ChatMessage({
           </div>
         )}
 
-        {/* Message bubble with larger, industry-standard font */}
+        {/* Message bubble */}
         <div
           className={`relative rounded-2xl px-6 py-4.5 text-[15px] leading-relaxed tracking-normal font-sans ${
             isUser
@@ -130,7 +118,7 @@ export default function ChatMessage({
             })}
           </div>
 
-          {/* Copy button & Voice Speech & Source Citations Actions */}
+          {/* Copy button & Voice Speech Actions */}
           {!isUser && (
             <div className="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400 gap-4">
               <div className="flex items-center gap-4">
@@ -170,44 +158,9 @@ export default function ChatMessage({
                   )}
                 </button>
               </div>
-
-              {sources.length > 0 && (
-                <button
-                  onClick={() => setShowSources(!showSources)}
-                  className="flex items-center gap-1 text-cyan-400 hover:underline font-semibold"
-                >
-                  <FileText className="h-4 w-4" />
-                  <span>{sources.length} Citation{sources.length === 1 ? "" : "s"}</span>
-                  {showSources ? (
-                    <ChevronUp className="h-4 w-4" />
-                  ) : (
-                    <ChevronDown className="h-4 w-4" />
-                  )}
-                </button>
-              )}
             </div>
           )}
         </div>
-
-        {/* Collapsible Source Citations Drawer */}
-        {!isUser && showSources && sources.length > 0 && (
-          <div className="mt-2.5 w-full rounded-xl bg-slate-950/90 p-4 border border-cyan-900/50 text-xs space-y-2.5">
-            <p className="font-bold text-cyan-400 flex items-center gap-1.5 text-xs">
-              <FileText className="h-4 w-4" /> Grounded References:
-            </p>
-            {sources.map((src, i) => (
-              <div key={i} className="rounded-lg bg-slate-900/90 p-3 border border-slate-800">
-                <div className="flex items-center justify-between font-bold text-white mb-1">
-                  <span>{src.fileName}</span>
-                  <span className="text-[10px] text-cyan-300 bg-cyan-950 px-2 py-0.5 rounded border border-cyan-800">
-                    Page/Slide {src.pageNumber}
-                  </span>
-                </div>
-                <p className="text-slate-400 text-xs italic">"{src.snippet}"</p>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
 
       {isUser && (

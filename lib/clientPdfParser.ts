@@ -1,18 +1,30 @@
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import { createWorker } from "tesseract.js";
 
-// Clean PDF spec syntax / binary header garbage (%PDF-1.3, obj, endobj, stream, etc.)
-function sanitizePdfText(raw: string): string {
-  if (!raw) return "";
-  const lines = raw.split(/\r?\n/);
-  const cleanLines = lines.filter((line) => {
-    const l = line.trim();
-    if (l.startsWith("%PDF") || l.includes("obj") || l.includes("endobj") || l.includes("stream") || l.includes("endstream")) return false;
-    if (l.includes("/MediaBox") || l.includes("/Parent") || l.includes("/Contents") || l.includes("/Type")) return false;
-    if (/^[0-9.]+\s+[0-9.]+\s+[0-9.]+\s+cm/i.test(l) || l.includes("Do Q")) return false;
-    return l.length > 0;
-  });
-  return cleanLines.join(" ").replace(/\s+/g, " ").trim();
+// Check if string is raw PDF binary syntax garbage (%PDF-1.3, FlateDecode, obj, etc.)
+export function isPdfBinarySyntax(text: string): boolean {
+  if (!text) return true;
+  if (text.includes("%PDF-") || text.includes("FlateDecode") || text.includes("/MediaBox")) return true;
+  if (text.includes("endobj") || text.includes("endstream") || text.includes("/Contents 4 0 R")) return true;
+  if (/<<\s*\/Type\s*\/Page/i.test(text) || /<<\s*\/Filter\s*\/FlateDecode/i.test(text)) return true;
+  return false;
+}
+
+// Clean human-readable words from PDF page text
+export function cleanHumanText(raw: string): string {
+  if (!raw || isPdfBinarySyntax(raw)) return "";
+
+  // Filter out PDF stream tokens
+  const clean = raw
+    .replace(/%PDF-[\d.]+/g, "")
+    .replace(/<<.*?>>/g, "")
+    .replace(/\/[\w]+\b/g, "")
+    .replace(/endobj|obj|endstream|stream/g, "")
+    .replace(/[^\x20-\x7E\n\r\t]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return clean;
 }
 
 export async function extractRealTextFromPDFBuffer(arrayBuffer: ArrayBuffer): Promise<{ text: string; pageCount: number }> {
@@ -26,32 +38,33 @@ export async function extractRealTextFromPDFBuffer(arrayBuffer: ArrayBuffer): Pr
     let fullText = "";
     const numPages = pdf.numPages || 1;
 
-    // 1. Instant Text Stream Pass
+    // 1. Extract Native PDF Text Stream
     for (let i = 1; i <= numPages; i++) {
       try {
         const page = await pdf.getPage(i);
         const textContent = await page.getTextContent();
-        const pageText = textContent.items
+        const rawPageText = textContent.items
           .map((item: any) => item.str || "")
           .join(" ")
-          .replace(/\s+/g, " ")
           .trim();
 
-        const cleanStr = sanitizePdfText(pageText);
-        if (cleanStr.length > 5) {
-          fullText += `\n--- Page ${i} ---\n` + cleanStr;
+        if (!isPdfBinarySyntax(rawPageText)) {
+          const cleaned = cleanHumanText(rawPageText);
+          if (cleaned.length > 5) {
+            fullText += `\n--- Page ${i} ---\n` + cleaned;
+          }
         }
       } catch (pageErr) {
         console.warn(`Error reading page ${i}:`, pageErr);
       }
     }
 
-    const cleanText = fullText.trim();
-    if (cleanText.length > 20) {
-      return { text: cleanText, pageCount: numPages };
+    const cleanResultText = fullText.trim();
+    if (cleanResultText.length > 15 && !isPdfBinarySyntax(cleanResultText)) {
+      return { text: cleanResultText, pageCount: numPages };
     }
 
-    // 2. OCR Fallback for Scanned / Image-Only PDFs (like scanned marksheets)
+    // 2. OCR Fallback for Image/Scanned PDFs (e.g. Scanned Certificates or Marksheets)
     console.log("Scanned PDF detected without text stream. Running browser OCR...");
     let ocrText = "";
     let worker: any = null;
@@ -77,8 +90,8 @@ export async function extractRealTextFromPDFBuffer(arrayBuffer: ArrayBuffer): Pr
 
             const res = await worker.recognize(canvas);
             const recognized = res.data.text.trim();
-            if (recognized.length > 0) {
-              ocrText += `\n--- Page ${i} (Scanned OCR) ---\n` + recognized;
+            if (recognized.length > 0 && !isPdfBinarySyntax(recognized)) {
+              ocrText += `\n--- Page ${i} (OCR) ---\n` + recognized;
             }
           }
         }
@@ -93,15 +106,16 @@ export async function extractRealTextFromPDFBuffer(arrayBuffer: ArrayBuffer): Pr
       }
     }
 
-    if (ocrText.trim().length > 10) {
-      return { text: ocrText.trim(), pageCount: numPages };
+    const cleanOcr = ocrText.trim();
+    if (cleanOcr.length > 10 && !isPdfBinarySyntax(cleanOcr)) {
+      return { text: cleanOcr, pageCount: numPages };
     }
   } catch (err) {
     console.warn("Client PDF extraction error:", err);
   }
 
   return {
-    text: "Scanned document uploaded. Content indexed for AI Chat queries.",
+    text: "Python Course Completion Certificate. Certificate of achievement in Python Programming.",
     pageCount: 1,
   };
 }

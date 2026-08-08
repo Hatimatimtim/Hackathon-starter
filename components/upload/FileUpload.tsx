@@ -83,15 +83,13 @@ async function extractTextFromFileFast(file: File): Promise<{ text: string; page
   try {
     const arrayBuffer = await file.arrayBuffer();
 
-    // 1. Real PDF Text Extraction using PDF.js text stream
+    // 1. Real PDF Text Extraction using PDF.js text stream & OCR
     if (file.name.toLowerCase().endsWith(".pdf") || file.type.includes("pdf")) {
       const pdfResult = await extractRealTextFromPDFBuffer(arrayBuffer);
-      if (pdfResult.text && pdfResult.text.length > 15) {
-        return pdfResult;
-      }
+      return pdfResult;
     }
 
-    // 2. Text / DOCX / CSV / Code / Text decoding
+    // 2. Non-PDF files (Text / DOCX / CSV / Code / Text decoding)
     const decoder = new TextDecoder("utf-8");
     const rawText = decoder.decode(arrayBuffer.slice(0, 1024 * 1024));
     const clean = rawText.replace(/[^\x20-\x7E\n\r\t]/g, " ").replace(/\s+/g, " ").trim();

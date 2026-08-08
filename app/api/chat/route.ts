@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { askGemini } from "@/services/gemini";
 import { askOpenRouter } from "@/services/openrouter";
-import { getDocuments, getCombinedDocumentText, getAllDocumentChunks } from "@/lib/documentStore";
+import { getDocuments, getCombinedDocumentText } from "@/lib/documentStore";
 
 interface ClientDocInput {
   id?: string;
@@ -19,6 +19,14 @@ const SYSTEM_TECH_KEYWORDS = [
   "what is this", "who created", "tech stack", "rules", "audit"
 ];
 
+function isPdfBinarySyntax(text: string): boolean {
+  if (!text) return true;
+  if (text.includes("%PDF-") || text.includes("FlateDecode") || text.includes("/MediaBox")) return true;
+  if (text.includes("endobj") || text.includes("endstream") || text.includes("/Contents 4 0 R")) return true;
+  if (/<<\s*\/Type\s*\/Page/i.test(text) || /<<\s*\/Filter\s*\/FlateDecode/i.test(text)) return true;
+  return false;
+}
+
 function getGreetingResponse(msg: string, docsCount: number, docsNames: string[]): string | null {
   const clean = msg.trim().toLowerCase();
 
@@ -28,8 +36,7 @@ function getGreetingResponse(msg: string, docsCount: number, docsNames: string[]
 I am built to assist you with your uploaded documents by:
 - 🔍 **Searching Policy & Document Knowledge** grounded strictly in your files
 - 🛡️ **Verifying Regulatory Compliance** against GDPR, SOC 2, ISO 27001, and internal guidelines
-- 📄 **Providing Exact Source Citations** with page/slide references
-- 🔊 **Voice Audio Playback & Microphone Input** for interactive demos
+- 🔊 **Voice Audio Playback & Interactive AI Q&A**
 
 Currently, you have **${docsCount} document(s)** indexed in memory (${docsNames.join(", ") || "None"}). Ask me any document question or procedure details!`;
   }
@@ -47,8 +54,7 @@ Currently, you have **${docsCount} document(s)** indexed in memory (${docsNames.
 
 function generateOfflineGroundedAnswer(
   message: string,
-  allDocs: { fileName: string; rawText: string; pageCount: number }[],
-  sources: { fileName: string; pageNumber: number; snippet: string }[]
+  allDocs: { fileName: string; rawText: string; pageCount: number }[]
 ): string {
   const queryLower = message.toLowerCase();
 
@@ -59,11 +65,11 @@ function generateOfflineGroundedAnswer(
     return `### 🛠️ KCAI Platform Technical Overview & System Guide
 
 - **Platform Name**: KCAI Zero-Hallucination Knowledge & Compliance Assistant
-- **Core Mission**: Parse unstructured enterprise documents (PDFs, Marksheets, Certificates, PPTX, Word DOCX, TXT, CSV) and provide citation-backed Q&A and automated compliance verification.
+- **Core Mission**: Parse unstructured enterprise documents (PDFs, Marksheets, Certificates, PPTX, Word DOCX, TXT, CSV) and provide clear Q&A and automated compliance verification.
 - **Key System Features**:
   - 📄 **Instant Document Ingestion**: Upload multi-format files or paste text in <50ms.
   - 🛡️ **Automated Compliance Audits**: Verify policies against GDPR, HIPAA, SOC 2, and ISO 27001 standards.
-  - 💬 **Grounded AI Q&A Chatbot**: Query documents with passage-level source citations.
+  - 💬 **Grounded AI Q&A Chatbot**: Query documents directly with zero hallucinations.
   - 🔐 **Stateless User Authentication**: Secure Login, Registration, and Password Reset flows.
 - **Active Documents**: Currently tracking **${allDocs.length} document(s)** in memory (${allDocs.map((d) => d.fileName).join(", ") || "None"}).`;
   }
@@ -80,7 +86,6 @@ function generateOfflineGroundedAnswer(
     return queryTerms.some((term) => textLower.includes(term));
   });
 
-  // If terms didn't match specific words but user is asking about their document/file/marksheet
   const isDocQuery = queryLower.includes("file") ||
     queryLower.includes("document") ||
     queryLower.includes("marksheet") ||
@@ -98,7 +103,6 @@ function generateOfflineGroundedAnswer(
   }
 
   if (matchingDocs.length === 0) {
-    // Return out-of-context message ONLY for completely unrelated topics (sports, recipes, weather, etc.)
     return "The requested information is not present in the uploaded source documents or website context.";
   }
 
@@ -110,7 +114,7 @@ function generateOfflineGroundedAnswer(
     const lines = d.rawText
       .split(/\n+/)
       .map((l) => l.trim())
-      .filter((l) => l.length > 5 && !l.startsWith("==="));
+      .filter((l) => l.length > 5 && !isPdfBinarySyntax(l));
 
     const matchingLines = lines.filter((l) => {
       const lLower = l.toLowerCase();
@@ -119,18 +123,18 @@ function generateOfflineGroundedAnswer(
 
     const linesToShow = matchingLines.length > 0 ? matchingLines.slice(0, 6) : lines.slice(0, 4);
 
-    linesToShow.forEach((l) => {
-      response += `- ${l}\n`;
-    });
+    if (linesToShow.length > 0) {
+      linesToShow.forEach((l) => {
+        response += `- ${l}\n`;
+      });
+    } else {
+      response += `- Content available for ${d.fileName}.\n`;
+    }
 
     response += `\n`;
   });
 
-  if (sources.length > 0) {
-    response += `\n[Document Citation: ${sources[0].fileName}, Page: ${sources[0].pageNumber}]`;
-  }
-
-  return response;
+  return response.trim();
 }
 
 export async function POST(req: Request) {
@@ -211,34 +215,6 @@ export async function POST(req: Request) {
       targetDocNames = activeDocNames;
     }
 
-    // Extract relevant source citations snippets
-    const queryTerms = message
-      .toLowerCase()
-      .split(/\s+/)
-      .filter((t) => t.length > 2);
-    const chunks = getAllDocumentChunks();
-
-    let matchedChunks = chunks.filter((chunk) => {
-      const text = (chunk.fileName + " " + chunk.content).toLowerCase();
-      return queryTerms.some((term) => text.includes(term));
-    });
-
-    if (matchedChunks.length === 0 && documents.length > 0) {
-      matchedChunks = documents.map((d) => ({
-        id: `chunk-${d.id}`,
-        documentId: d.id,
-        fileName: d.fileName,
-        pageNumber: 1,
-        content: d.rawText.substring(0, 200),
-      }));
-    }
-
-    const matchedSources = matchedChunks.slice(0, 4).map((c) => ({
-      fileName: c.fileName,
-      pageNumber: c.pageNumber,
-      snippet: c.content.substring(0, 180) + "...",
-    }));
-
     // ==========================================
     // PRIMARY AI — GEMINI 2.5 FLASH
     // ==========================================
@@ -248,11 +224,11 @@ export async function POST(req: Request) {
         const answer = await askGemini(message, contextText);
 
         return NextResponse.json({
-          answer,
+          answer: answer.replace(/\[Document Citation:.*?\]/gi, "").trim(),
           modelUsed: "Google Gemini Flash Engine",
           documentsCount: documents.length,
           activeDocuments: targetDocNames,
-          sources: matchedSources,
+          sources: [],
         });
       } catch (geminiError) {
         console.warn("Gemini API call failed. Trying OpenRouter fallback...", geminiError);
@@ -268,11 +244,11 @@ export async function POST(req: Request) {
         const answer = await askOpenRouter(message, contextText);
 
         return NextResponse.json({
-          answer,
+          answer: answer.replace(/\[Document Citation:.*?\]/gi, "").trim(),
           modelUsed: "OpenRouter AI Engine (Backup)",
           documentsCount: documents.length,
           activeDocuments: targetDocNames,
-          sources: matchedSources,
+          sources: [],
         });
       } catch (openRouterError) {
         console.warn("OpenRouter API call failed:", openRouterError);
@@ -283,14 +259,14 @@ export async function POST(req: Request) {
     // FAIL-SAFE GROUNDING ENGINE (OFFLINE MODE)
     // ==========================================
     console.log("Using Fail-Safe Grounding Engine (Offline Mode)...");
-    const offlineAnswer = generateOfflineGroundedAnswer(message, documents, matchedSources);
+    const offlineAnswer = generateOfflineGroundedAnswer(message, documents);
 
     return NextResponse.json({
       answer: offlineAnswer,
       modelUsed: "KCAI Grounded Intelligence Engine",
       documentsCount: documents.length,
       activeDocuments: targetDocNames,
-      sources: matchedSources,
+      sources: [],
     });
   } catch (error) {
     console.error("========== CHAT ERROR ==========", error);

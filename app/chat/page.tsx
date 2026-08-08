@@ -1,16 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import ChatMessage, { SourceCitation } from "@/components/chat/ChatMessage";
+import ChatMessage from "@/components/chat/ChatMessage";
 import ChatInput from "@/components/chat/ChatInput";
 import ChatSidebar from "@/components/chat/ChatSidebar";
-import { Bot, Sparkles, AlertTriangle } from "lucide-react";
+import { Bot, Sparkles } from "lucide-react";
 
 interface MessageState {
   role: "user" | "assistant";
   message: string;
   modelUsed?: string;
-  sources?: SourceCitation[];
 }
 
 export default function ChatPage() {
@@ -83,7 +82,6 @@ export default function ChatPage() {
           role: "assistant",
           message: data.answer,
           modelUsed: data.modelUsed,
-          sources: data.sources,
         },
       ]);
     } catch (error: any) {
@@ -130,14 +128,14 @@ export default function ChatPage() {
               <p className="text-[11px] text-slate-400">
                 {selectedDocId
                   ? "Filtered: Single Target Document"
-                  : "Searching all active knowledge base documents"}
+                  : "Searching active knowledge base documents"}
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
             <span className="flex items-center gap-1 text-xs font-semibold text-emerald-400 bg-emerald-950/40 px-3 py-1 rounded-lg border border-emerald-800/40">
-              <Sparkles className="h-3 w-3" /> Gemini 2.5 Active
+              <Sparkles className="h-3 w-3" /> Gemini Active
             </span>
           </div>
         </div>
@@ -150,7 +148,6 @@ export default function ChatPage() {
               role={msg.role}
               message={msg.message}
               modelUsed={msg.modelUsed}
-              sources={msg.sources}
             />
           ))}
 
@@ -164,16 +161,14 @@ export default function ChatPage() {
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-500"></span>
                 </span>
-                <span>Searching knowledge chunks & reasoning...</span>
+                <span>Reasoning over document content...</span>
               </div>
             </div>
           )}
         </div>
 
-        {/* Chat Input */}
-        <div className="w-full">
-          <ChatInput onSend={handleSend} disabled={loading} />
-        </div>
+        {/* Input Bar */}
+        <ChatInput onSend={handleSend} disabled={loading} />
       </div>
     </main>
   );
