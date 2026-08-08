@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import StatCard from "@/components/dashboard/StatCard";
+import RiskMatrix from "@/components/dashboard/RiskMatrix";
 import {
   FileText,
   MessageSquare,
@@ -147,6 +148,9 @@ export default function DashboardPage() {
             trend="99.9% Uptime"
           />
         </div>
+
+        {/* Enterprise NIST Risk Heatmap */}
+        <RiskMatrix auditHistory={auditHistory} docsCount={docs.length} />
 
         {/* Main Content Grid: Active Documents & Audit History */}
         <div className="grid gap-8 lg:grid-cols-3">
