@@ -1,0 +1,7 @@
+# Cline / Agent Rules
+
+- Follow zero hallucination policy for document analysis.
+- Require exact line & page citations for every compliance claim.
+- Refuse ungrounded queries gracefully.
+- Support multi-format input parsing (PDF, DOCX, TXT, OCR images).
+- Ensure all CI/CD pipeline checks pass (`npm run build`, `npx tsc --noEmit`).
