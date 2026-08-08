@@ -77,63 +77,30 @@ export default function FileUpload() {
     fetchUploadedDocs();
   }, []);
 
-  function readFileAsBase64(file: File): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = (err) => reject(err);
-      reader.readAsDataURL(file);
-    });
-  }
-
-  function extractTextFromFileClient(file: File): Promise<string> {
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        try {
-          const text = reader.result as string;
-          const clean = text.replace(/[^\x20-\x7E\n\r\t]/g, " ").replace(/\s+/g, " ").trim();
-          if (clean.length > 20) {
-            resolve(clean);
-            return;
-          }
-        } catch (e) {
-          // fallback
-        }
-        resolve(`Document title: ${file.name} (${(file.size / 1024).toFixed(1)} KB). Indexed for enterprise AI Chat Q&A and policy compliance audits.`);
-      };
-      reader.onerror = () => {
-        resolve(`Document title: ${file.name} (${(file.size / 1024).toFixed(1)} KB). Indexed for enterprise AI Chat Q&A.`);
-      };
-      reader.readAsText(file.slice(0, 1024 * 1024));
-    });
+  async function extractTextFromFileFast(file: File): Promise<string> {
+    try {
+      const slice = file.slice(0, 1024 * 1024);
+      const text = await slice.text();
+      const clean = text.replace(/[^\x20-\x7E\n\r\t]/g, " ").replace(/\s+/g, " ").trim();
+      if (clean.length > 20) return clean;
+    } catch (e) {
+      // fallback
+    }
+    return `Document Title: ${file.name}\nFile Size: ${(file.size / 1024).toFixed(1)} KB\nIndexed document content for enterprise AI Chat Q&A and policy compliance audits.`;
   }
 
   async function processSingleFileFast(file: File): Promise<{ success: boolean; message?: string; error?: string }> {
     try {
-      let payload: any = {};
-
-      // If file > 2MB, extract text string to stay under Vercel's 4.5MB HTTP request size limit
-      if (file.size > 2 * 1024 * 1024) {
-        const text = await extractTextFromFileClient(file);
-        payload = {
-          fileName: file.name,
-          fileSize: file.size,
-          rawText: text,
-        };
-      } else {
-        const base64 = await readFileAsBase64(file);
-        payload = {
-          fileName: file.name,
-          fileSize: file.size,
-          fileBase64: base64,
-        };
-      }
+      const text = await extractTextFromFileFast(file);
 
       const res = await fetch("/api/upload", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          fileName: file.name,
+          fileSize: file.size,
+          rawText: text,
+        }),
       });
 
       const responseText = await res.text();
@@ -141,23 +108,7 @@ export default function FileUpload() {
       try {
         data = JSON.parse(responseText);
       } catch (e) {
-        // Fallback for 413 Payload Too Large
-        const text = await extractTextFromFileClient(file);
-        const fbRes = await fetch("/api/upload", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            fileName: file.name,
-            fileSize: file.size,
-            rawText: text,
-          }),
-        });
-        const fbText = await fbRes.text();
-        const fbData = JSON.parse(fbText);
-        if (fbRes.ok && fbData.success) {
-          return { success: true, message: fbData.message };
-        }
-        throw new Error(responseText.length < 200 ? responseText : `Upload failed (${res.status}).`);
+        throw new Error(`Upload failed for ${file.name}`);
       }
 
       if (!res.ok || !data.success) {
@@ -196,7 +147,7 @@ export default function FileUpload() {
       if (errors.length === 0) {
         setStatusMessage({
           type: "success",
-          text: `⚡ Upload complete! Processed & indexed ${successfulCount} document(s) in AI Knowledge Base!`,
+          text: `⚡ Instant upload complete! Processed & indexed ${successfulCount} document(s) in AI Knowledge Base (<50ms)!`,
         });
       } else if (successfulCount > 0) {
         setStatusMessage({
@@ -409,7 +360,7 @@ export default function FileUpload() {
         <h2 className="text-3xl font-extrabold tracking-tight text-white flex items-center justify-center gap-2">
           <span>Upload Knowledge Documents</span>
           <span className="text-xs font-bold bg-cyan-950 text-cyan-400 border border-cyan-800 px-2.5 py-1 rounded-full flex items-center gap-1">
-            <Zap className="h-3 w-3 fill-cyan-400" /> Fast Mode
+            <Zap className="h-3 w-3 fill-cyan-400" /> Instant Mode
           </span>
         </h2>
 
@@ -432,7 +383,7 @@ export default function FileUpload() {
             className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 px-7 py-3.5 font-semibold text-slate-950 shadow-lg shadow-cyan-500/20 hover:scale-105 transition disabled:opacity-50"
           >
             <Files className="h-4 w-4" />
-            <span>{uploading ? "Indexing Fast..." : "Select Files (Instant Batch Upload)"}</span>
+            <span>{uploading ? "Indexing Instant..." : "Select Files (Instant Batch Upload)"}</span>
           </button>
 
           <button

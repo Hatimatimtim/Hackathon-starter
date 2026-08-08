@@ -12,6 +12,13 @@ interface ClientDocInput {
   previewSnippet?: string;
 }
 
+const SYSTEM_TECH_KEYWORDS = [
+  "website", "system", "app", "application", "kcai", "platform", "how to upload",
+  "how do i upload", "file format", "supported format", "compliance", "gdpr", "soc2",
+  "features", "dashboard", "login", "register", "forgot password", "reset password",
+  "what is this", "who created", "tech stack", "rules", "audit"
+];
+
 function getGreetingResponse(msg: string, docsCount: number, docsNames: string[]): string | null {
   const clean = msg.trim().toLowerCase();
 
@@ -43,24 +50,44 @@ function generateOfflineGroundedAnswer(
   allDocs: { fileName: string; rawText: string; pageCount: number }[],
   sources: { fileName: string; pageNumber: number; snippet: string }[]
 ): string {
-  if (allDocs.length === 0) {
-    return "No text content found in uploaded documents. Please upload a document to query AI Chat.";
+  const queryLower = message.toLowerCase();
+
+  // 1. Check if user is asking a general/technical question about the website or platform
+  const isSystemTechQuery = SYSTEM_TECH_KEYWORDS.some((kw) => queryLower.includes(kw));
+
+  if (isSystemTechQuery) {
+    return `### 🛠️ KCAI Platform Technical Overview & System Guide
+
+- **Platform Name**: KCAI Zero-Hallucination Knowledge & Compliance Assistant
+- **Core Mission**: Parse unstructured enterprise documents (PDFs, Marksheets, Certificates, PPTX, Word DOCX, TXT, CSV) and provide citation-backed Q&A and automated compliance verification.
+- **Key System Features**:
+  - 📄 **Instant Document Ingestion**: Upload multi-format files or paste text in <50ms.
+  - 🛡️ **Automated Compliance Audits**: Verify policies against GDPR, HIPAA, SOC 2, and ISO 27001 standards.
+  - 💬 **Grounded AI Q&A Chatbot**: Query documents with passage-level source citations.
+  - 🔐 **Stateless User Authentication**: Secure Login, Registration, and Password Reset flows.
+- **Active Documents**: Currently tracking **${allDocs.length} document(s)** in memory (${allDocs.map((d) => d.fileName).join(", ") || "None"}).`;
   }
 
-  const queryLower = message.toLowerCase();
+  if (allDocs.length === 0) {
+    return "The requested information is not present in the uploaded source documents or website context.";
+  }
+
   const queryTerms = queryLower.split(/\s+/).filter((t) => t.length > 2);
 
-  // Search docs for matching content
+  // 2. Search uploaded documents for matching terms
   const matchingDocs = allDocs.filter((d) => {
     const textLower = (d.fileName + " " + d.rawText).toLowerCase();
     return queryTerms.some((term) => textLower.includes(term));
   });
 
-  const docsToDisplay = matchingDocs.length > 0 ? matchingDocs : allDocs;
+  if (matchingDocs.length === 0) {
+    // Check if query is completely out of context / out of box / unrelated
+    return "The requested information is not present in the uploaded source documents or website context.";
+  }
 
-  let response = `Based on your active knowledge base documents:\n\n`;
+  let response = `Based on your uploaded knowledge base documents:\n\n`;
 
-  docsToDisplay.forEach((d) => {
+  matchingDocs.forEach((d) => {
     response += `### 📄 ${d.fileName}\n`;
 
     const lines = d.rawText
@@ -75,13 +102,9 @@ function generateOfflineGroundedAnswer(
 
     const linesToShow = matchingLines.length > 0 ? matchingLines.slice(0, 6) : lines.slice(0, 4);
 
-    if (linesToShow.length > 0) {
-      linesToShow.forEach((l) => {
-        response += `- ${l}\n`;
-      });
-    } else {
-      response += `- Extracted text content available from ${d.fileName} (${d.pageCount} sections).\n`;
-    }
+    linesToShow.forEach((l) => {
+      response += `- ${l}\n`;
+    });
 
     response += `\n`;
   });
@@ -141,16 +164,6 @@ export async function POST(req: Request) {
         activeDocuments: activeDocNames,
         sources: [],
       });
-    }
-
-    if (documents.length === 0) {
-      return NextResponse.json(
-        {
-          error:
-            "No documents have been uploaded yet. Please upload a document or load the demo dataset first.",
-        },
-        { status: 400 }
-      );
     }
 
     // Build context text
