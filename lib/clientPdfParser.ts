@@ -115,7 +115,7 @@ export async function extractRealTextFromPDFBuffer(arrayBuffer: ArrayBuffer): Pr
   }
 
   return {
-    text: "Python Course Completion Certificate. Certificate of achievement in Python Programming.",
+    text: "",
     pageCount: 1,
   };
 }
