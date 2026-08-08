@@ -22,6 +22,8 @@ import {
   PlusCircle,
 } from "lucide-react";
 
+import { extractRealTextFromPDFBuffer } from "@/lib/clientPdfParser";
+
 interface DocumentMeta {
   id: string;
   fileName: string;
@@ -77,49 +79,68 @@ export default function FileUpload() {
     fetchUploadedDocs();
   }, []);
 
-  async function extractTextFromFileFast(file: File): Promise<string> {
+async function extractTextFromFileFast(file: File): Promise<{ text: string; pageCount: number }> {
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+
+    // 1. Real PDF Text Extraction using PDF.js text stream
+    if (file.name.toLowerCase().endsWith(".pdf") || file.type.includes("pdf")) {
+      const pdfResult = await extractRealTextFromPDFBuffer(arrayBuffer);
+      if (pdfResult.text && pdfResult.text.length > 15) {
+        return pdfResult;
+      }
+    }
+
+    // 2. Text / DOCX / CSV / Code / Text decoding
+    const decoder = new TextDecoder("utf-8");
+    const rawText = decoder.decode(arrayBuffer.slice(0, 1024 * 1024));
+    const clean = rawText.replace(/[^\x20-\x7E\n\r\t]/g, " ").replace(/\s+/g, " ").trim();
+
+    if (clean.length > 20) {
+      return { text: clean, pageCount: 1 };
+    }
+  } catch (e) {
+    console.warn("Client text extraction error:", e);
+  }
+
+  return {
+    text: `Document Title: ${file.name}\nFile Size: ${(file.size / 1024).toFixed(1)} KB\nIndexed document content for enterprise AI Chat Q&A and policy compliance audits.`,
+    pageCount: 1,
+  };
+}
+
+async function processSingleFileFast(file: File): Promise<{ success: boolean; message?: string; error?: string }> {
+  try {
+    const { text, pageCount } = await extractTextFromFileFast(file);
+
+    const res = await fetch("/api/upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        fileName: file.name,
+        fileSize: file.size,
+        pageCount,
+        rawText: text,
+      }),
+    });
+
+    const responseText = await res.text();
+    let data: any = {};
     try {
-      const slice = file.slice(0, 1024 * 1024);
-      const text = await slice.text();
-      const clean = text.replace(/[^\x20-\x7E\n\r\t]/g, " ").replace(/\s+/g, " ").trim();
-      if (clean.length > 20) return clean;
+      data = JSON.parse(responseText);
     } catch (e) {
-      // fallback
+      throw new Error(`Upload failed for ${file.name}`);
     }
-    return `Document Title: ${file.name}\nFile Size: ${(file.size / 1024).toFixed(1)} KB\nIndexed document content for enterprise AI Chat Q&A and policy compliance audits.`;
-  }
 
-  async function processSingleFileFast(file: File): Promise<{ success: boolean; message?: string; error?: string }> {
-    try {
-      const text = await extractTextFromFileFast(file);
-
-      const res = await fetch("/api/upload", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fileName: file.name,
-          fileSize: file.size,
-          rawText: text,
-        }),
-      });
-
-      const responseText = await res.text();
-      let data: any = {};
-      try {
-        data = JSON.parse(responseText);
-      } catch (e) {
-        throw new Error(`Upload failed for ${file.name}`);
-      }
-
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || `Upload processing failed for ${file.name}`);
-      }
-
-      return { success: true, message: data.message };
-    } catch (err: any) {
-      throw new Error(err.message || `Failed to process ${file.name}`);
+    if (!res.ok || !data.success) {
+      throw new Error(data.error || `Upload processing failed for ${file.name}`);
     }
+
+    return { success: true, message: data.message };
+  } catch (err: any) {
+    throw new Error(err.message || `Failed to process ${file.name}`);
   }
+}
 
   async function handleFiles(selected: FileList | null) {
     if (!selected || selected.length === 0) return;

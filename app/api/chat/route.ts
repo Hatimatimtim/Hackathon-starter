@@ -75,13 +75,30 @@ function generateOfflineGroundedAnswer(
   const queryTerms = queryLower.split(/\s+/).filter((t) => t.length > 2);
 
   // 2. Search uploaded documents for matching terms
-  const matchingDocs = allDocs.filter((d) => {
+  let matchingDocs = allDocs.filter((d) => {
     const textLower = (d.fileName + " " + d.rawText).toLowerCase();
     return queryTerms.some((term) => textLower.includes(term));
   });
 
+  // If terms didn't match specific words but user is asking about their document/file/marksheet
+  const isDocQuery = queryLower.includes("file") ||
+    queryLower.includes("document") ||
+    queryLower.includes("marksheet") ||
+    queryLower.includes("certificate") ||
+    queryLower.includes("mark") ||
+    queryLower.includes("score") ||
+    queryLower.includes("grade") ||
+    queryLower.includes("detail") ||
+    queryLower.includes("summary") ||
+    queryLower.includes("tell me") ||
+    queryLower.includes("what is");
+
+  if (matchingDocs.length === 0 && isDocQuery && allDocs.length > 0) {
+    matchingDocs = allDocs;
+  }
+
   if (matchingDocs.length === 0) {
-    // Check if query is completely out of context / out of box / unrelated
+    // Return out-of-context message ONLY for completely unrelated topics (sports, recipes, weather, etc.)
     return "The requested information is not present in the uploaded source documents or website context.";
   }
 
