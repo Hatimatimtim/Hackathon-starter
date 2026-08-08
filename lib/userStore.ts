@@ -94,20 +94,8 @@ if (globalThis.currentSessionStore === undefined) {
       globalThis.currentSessionStore = null;
     }
   } else {
-    // Default logged in as CISO demo user for instant usability
-    const defaultUser = DEFAULT_USERS[0];
-    globalThis.currentSessionStore = {
-      user: {
-        id: defaultUser.id,
-        name: defaultUser.name,
-        email: defaultUser.email,
-        role: defaultUser.role,
-        avatarUrl: defaultUser.avatarUrl,
-        createdAt: defaultUser.createdAt,
-      },
-      token: `token-${Date.now()}`,
-      createdAt: new Date().toISOString(),
-    };
+    // Default to logged out state (null) for new visitors
+    globalThis.currentSessionStore = null;
     saveSessionToDisk();
   }
 }

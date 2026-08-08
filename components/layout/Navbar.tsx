@@ -176,7 +176,7 @@ export default function Navbar() {
               </Link>
               <Link
                 href="/register"
-                className="hidden sm:flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 text-xs font-bold text-slate-950 shadow-md shadow-cyan-500/20 hover:scale-[1.02] transition"
+                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 text-xs font-bold text-slate-950 shadow-md shadow-cyan-500/20 hover:scale-[1.02] transition"
               >
                 <UserPlus className="h-3.5 w-3.5" />
                 <span>Register</span>
