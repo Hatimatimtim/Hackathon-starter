@@ -3,7 +3,14 @@ import { askGemini } from "@/services/gemini";
 import { askOpenRouter } from "@/services/openrouter";
 import { getDocuments, getCombinedDocumentText, getAllDocumentChunks } from "@/lib/documentStore";
 
-const GREETING_REGEX = /^(hi|hello|hey|greetings|good\s*(morning|afternoon|evening)|who\s*are\s*you|what\s*can\s*you\s*do|help|thanks|thank\s*you)\s*[!.]*$/i;
+interface ClientDocInput {
+  id?: string;
+  fileName: string;
+  fileSize?: number;
+  pageCount?: number;
+  rawText?: string;
+  previewSnippet?: string;
+}
 
 function getGreetingResponse(msg: string, docsCount: number, docsNames: string[]): string | null {
   const clean = msg.trim().toLowerCase();
@@ -33,10 +40,10 @@ Currently, you have **${docsCount} document(s)** indexed in memory (${docsNames.
 
 function generateOfflineGroundedAnswer(
   message: string,
+  allDocs: { fileName: string; rawText: string; pageCount: number }[],
   sources: { fileName: string; pageNumber: number; snippet: string }[]
 ): string {
-  const docs = getDocuments();
-  if (docs.length === 0) {
+  if (allDocs.length === 0) {
     return "No text content found in uploaded documents. Please upload a document to query AI Chat.";
   }
 
@@ -44,31 +51,38 @@ function generateOfflineGroundedAnswer(
   const queryTerms = queryLower.split(/\s+/).filter((t) => t.length > 2);
 
   // Search docs for matching content
-  const matchingDocs = docs.filter((d) => {
+  const matchingDocs = allDocs.filter((d) => {
     const textLower = (d.fileName + " " + d.rawText).toLowerCase();
     return queryTerms.some((term) => textLower.includes(term));
   });
 
-  const docsToDisplay = matchingDocs.length > 0 ? matchingDocs : docs;
+  const docsToDisplay = matchingDocs.length > 0 ? matchingDocs : allDocs;
 
   let response = `Based on your active knowledge base documents:\n\n`;
 
   docsToDisplay.forEach((d) => {
     response += `### 📄 ${d.fileName}\n`;
+
     const lines = d.rawText
       .split(/\n+/)
       .map((l) => l.trim())
-      .filter((l) => l.length > 10 && !l.startsWith("==="));
+      .filter((l) => l.length > 5 && !l.startsWith("==="));
 
     const matchingLines = lines.filter((l) => {
       const lLower = l.toLowerCase();
       return queryTerms.some((t) => lLower.includes(t));
     });
 
-    const linesToShow = matchingLines.length > 0 ? matchingLines.slice(0, 4) : lines.slice(0, 3);
-    linesToShow.forEach((l) => {
-      response += `- ${l}\n`;
-    });
+    const linesToShow = matchingLines.length > 0 ? matchingLines.slice(0, 6) : lines.slice(0, 4);
+
+    if (linesToShow.length > 0) {
+      linesToShow.forEach((l) => {
+        response += `- ${l}\n`;
+      });
+    } else {
+      response += `- Extracted text content available from ${d.fileName} (${d.pageCount} sections).\n`;
+    }
+
     response += `\n`;
   });
 
@@ -81,7 +95,7 @@ function generateOfflineGroundedAnswer(
 
 export async function POST(req: Request) {
   try {
-    const { message, selectedDocId } = await req.json();
+    const { message, selectedDocId, clientDocuments } = await req.json();
 
     console.log("========== CHAT REQUEST ==========");
     console.log("Message:", message);
@@ -93,7 +107,28 @@ export async function POST(req: Request) {
       );
     }
 
-    const documents = getDocuments();
+    // Merge server documents with client documents for 100% serverless resilience
+    let serverDocs = getDocuments();
+    let allDocsMap = new Map<string, { id: string; fileName: string; rawText: string; pageCount: number }>();
+
+    serverDocs.forEach((d) => {
+      allDocsMap.set(d.fileName, { id: d.id, fileName: d.fileName, rawText: d.rawText, pageCount: d.pageCount });
+    });
+
+    if (Array.isArray(clientDocuments)) {
+      clientDocuments.forEach((cd: ClientDocInput) => {
+        if (cd.fileName && (cd.rawText || cd.previewSnippet)) {
+          allDocsMap.set(cd.fileName, {
+            id: cd.id || "doc-" + Math.random(),
+            fileName: cd.fileName,
+            rawText: cd.rawText || cd.previewSnippet || "",
+            pageCount: cd.pageCount || 1,
+          });
+        }
+      });
+    }
+
+    const documents = Array.from(allDocsMap.values());
     const activeDocNames = documents.map((d) => d.fileName);
 
     // Check for conversational greetings / small talk first
@@ -118,7 +153,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // Build context
+    // Build context text
     let contextText = "";
     let targetDocNames: string[] = [];
 
@@ -131,11 +166,13 @@ export async function POST(req: Request) {
     }
 
     if (!contextText) {
-      contextText = getCombinedDocumentText();
+      contextText = documents
+        .map((d) => `=== DOCUMENT: ${d.fileName} (${d.pageCount} Pages) ===\n${d.rawText}`)
+        .join("\n\n");
       targetDocNames = activeDocNames;
     }
 
-    // Extract relevant source citations snippets from all document chunks
+    // Extract relevant source citations snippets
     const queryTerms = message
       .toLowerCase()
       .split(/\s+/)
@@ -147,8 +184,14 @@ export async function POST(req: Request) {
       return queryTerms.some((term) => text.includes(term));
     });
 
-    if (matchedChunks.length === 0) {
-      matchedChunks = chunks.slice(0, 3);
+    if (matchedChunks.length === 0 && documents.length > 0) {
+      matchedChunks = documents.map((d) => ({
+        id: `chunk-${d.id}`,
+        documentId: d.id,
+        fileName: d.fileName,
+        pageNumber: 1,
+        content: d.rawText.substring(0, 200),
+      }));
     }
 
     const matchedSources = matchedChunks.slice(0, 4).map((c) => ({
@@ -162,12 +205,12 @@ export async function POST(req: Request) {
     // ==========================================
     if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== "placeholder_key") {
       try {
-        console.log("Calling Gemini 2.5 Flash...");
+        console.log("Calling Gemini AI Engine...");
         const answer = await askGemini(message, contextText);
 
         return NextResponse.json({
           answer,
-          modelUsed: "Google Gemini 2.5 Flash Engine",
+          modelUsed: "Google Gemini Flash Engine",
           documentsCount: documents.length,
           activeDocuments: targetDocNames,
           sources: matchedSources,
@@ -201,7 +244,7 @@ export async function POST(req: Request) {
     // FAIL-SAFE GROUNDING ENGINE (OFFLINE MODE)
     // ==========================================
     console.log("Using Fail-Safe Grounding Engine (Offline Mode)...");
-    const offlineAnswer = generateOfflineGroundedAnswer(message, matchedSources);
+    const offlineAnswer = generateOfflineGroundedAnswer(message, documents, matchedSources);
 
     return NextResponse.json({
       answer: offlineAnswer,

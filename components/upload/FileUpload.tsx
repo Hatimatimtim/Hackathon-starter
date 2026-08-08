@@ -51,7 +51,13 @@ export default function FileUpload() {
         const text = await res.text();
         try {
           const data = JSON.parse(text);
-          setUploadedDocs(data.documents || []);
+          const docs = data.documents || [];
+          setUploadedDocs(docs);
+          try {
+            localStorage.setItem("kcai_documents", JSON.stringify(docs));
+          } catch (e) {
+            // silent
+          }
         } catch (e) {
           console.error("Non-JSON response from GET /api/upload");
         }

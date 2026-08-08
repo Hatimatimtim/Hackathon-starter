@@ -49,6 +49,16 @@ export default function ChatPage() {
     try {
       setLoading(true);
 
+      let clientDocuments: any[] = [];
+      try {
+        const stored = localStorage.getItem("kcai_documents");
+        if (stored) {
+          clientDocuments = JSON.parse(stored);
+        }
+      } catch (e) {
+        // silent
+      }
+
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: {
@@ -57,6 +67,7 @@ export default function ChatPage() {
         body: JSON.stringify({
           message,
           selectedDocId,
+          clientDocuments,
         }),
       });
 
