@@ -45,8 +45,13 @@ export default function FileUpload() {
     try {
       const res = await fetch("/api/upload");
       if (res.ok) {
-        const data = await res.json();
-        setUploadedDocs(data.documents || []);
+        const text = await res.text();
+        try {
+          const data = JSON.parse(text);
+          setUploadedDocs(data.documents || []);
+        } catch (e) {
+          console.error("Non-JSON response from GET /api/upload");
+        }
       }
     } catch (err) {
       console.error("Failed to load documents list", err);
@@ -68,6 +73,16 @@ export default function FileUpload() {
     setStatusMessage({ type: null, text: "" });
     setUploadProgress(`Extracting content from ${file.name}...`);
 
+    if (file.size > 4.5 * 1024 * 1024) {
+      setStatusMessage({
+        type: "error",
+        text: `File "${file.name}" is ${(file.size / (1024 * 1024)).toFixed(1)}MB. Vercel serverless functions support files up to 4.5MB. Please upload a smaller file.`,
+      });
+      setUploading(false);
+      setUploadProgress("");
+      return;
+    }
+
     const formData = new FormData();
     formData.append("file", file);
 
@@ -77,7 +92,19 @@ export default function FileUpload() {
         body: formData,
       });
 
-      const data = await res.json();
+      const responseText = await res.text();
+      let data: any = {};
+      try {
+        data = JSON.parse(responseText);
+      } catch (e) {
+        if (!res.ok) {
+          throw new Error(
+            responseText.length < 200
+              ? responseText
+              : `Upload failed with status code ${res.status}.`
+          );
+        }
+      }
 
       if (!res.ok || !data.success) {
         throw new Error(data.error || "Upload processing failed");
@@ -111,15 +138,31 @@ export default function FileUpload() {
         method: "POST",
         body: formData,
       });
-      const data = await res.json();
-      if (res.ok) {
+
+      const responseText = await res.text();
+      let data: any = {};
+      try {
+        data = JSON.parse(responseText);
+      } catch (e) {
+        if (!res.ok) {
+          throw new Error(`Failed to load demo files (${res.status}).`);
+        }
+      }
+
+      if (res.ok && data.success) {
         setStatusMessage({
           type: "success",
           text: "Loaded Demo Knowledge Base (Security Policy PDF & HR PPTX presentation)!",
         });
         await fetchUploadedDocs();
+      } else {
+        throw new Error(data.error || "Failed to load demo dataset.");
       }
-    } catch (err) {
+    } catch (err: any) {
+      setStatusMessage({
+        type: "error",
+        text: err.message || "Failed to load demo dataset.",
+      });
       console.error(err);
     } finally {
       setLoadingDemo(false);

@@ -64,41 +64,49 @@ export async function processPDFDocument(
       const existing = pages.find((p) => p.pageNumber === pageNumber);
       if (existing && existing.text.length > 50) continue;
 
-      if (!worker) {
-        worker = await createWorker("eng");
-      }
+      try {
+        if (!worker) {
+          worker = await createWorker("eng");
+        }
 
-      console.log(`OCR processing page ${pageNumber}...`);
-      const page = await pdf.getPage(pageNumber);
-      const viewport = page.getViewport({ scale: 2 });
-      const canvas = createCanvas(
-        Math.ceil(viewport.width),
-        Math.ceil(viewport.height)
-      );
-      const context = canvas.getContext("2d");
+        console.log(`OCR processing page ${pageNumber}...`);
+        const page = await pdf.getPage(pageNumber);
+        const viewport = page.getViewport({ scale: 2 });
+        const canvas = createCanvas(
+          Math.ceil(viewport.width),
+          Math.ceil(viewport.height)
+        );
+        const context = canvas.getContext("2d");
 
-      await page.render({
-        canvas: canvas as any,
-        canvasContext: context as any,
-        viewport,
-      }).promise;
+        await page.render({
+          canvas: canvas as any,
+          canvasContext: context as any,
+          viewport,
+        }).promise;
 
-      const imageBuffer = canvas.toBuffer("image/png");
-      const result = await worker.recognize(imageBuffer);
-      const ocrText = result.data.text.trim();
+        const imageBuffer = canvas.toBuffer("image/png");
+        const result = await worker.recognize(imageBuffer);
+        const ocrText = result.data.text.trim();
 
-      const existingIndex = pages.findIndex((p) => p.pageNumber === pageNumber);
-      if (existingIndex >= 0) {
-        pages[existingIndex].text = ocrText;
-      } else {
-        pages.push({ pageNumber, text: ocrText });
+        const existingIndex = pages.findIndex((p) => p.pageNumber === pageNumber);
+        if (existingIndex >= 0) {
+          pages[existingIndex].text = ocrText;
+        } else if (ocrText.length > 0) {
+          pages.push({ pageNumber, text: ocrText });
+        }
+      } catch (pageErr) {
+        console.warn(`OCR page ${pageNumber} skipped:`, pageErr);
       }
     }
   } catch (err) {
     console.warn("OCR fallback warning:", err);
   } finally {
     if (worker) {
-      await worker.terminate();
+      try {
+        await worker.terminate();
+      } catch (e) {
+        // silent
+      }
     }
   }
 
